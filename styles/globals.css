@@ -73,3 +73,13 @@ button:hover{filter:brightness(1.08)}
 .pill.support{color:var(--good); border-color:#205a44; background:#0e2a21}
 .pill.resistance{color:var(--bad); border-color:#6b2224; background:#2b0f12}
 .pill.undefined{color:#b8860b; border-color:#6a4b0d; background:#2a1e0c}
+
+/* Badge azul para TF (mesma família visual da calculadora) */
+.badge.tf{
+  color:#bcd3ff;                 /* texto azul claro */
+  background:#0e1f36;            /* azul escuro do tema */
+  border:1px solid #294a7a;      /* borda azul */
+  padding:2px 8px;
+  border-radius:999px;
+  font-size:12px;
+}
