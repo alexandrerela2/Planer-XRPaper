@@ -116,7 +116,7 @@ function MEContent(){
             {rows.map(r => (
               <tr key={r.id}>
                 <td>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                <td className="center">{r.timeframe}</td>
+                <td className="center"><span className="badge tf">{r.timeframe}</span></td>
                 <td className="center">
                   <span className={`badge ${r.type==='support'?'support':r.type==='resistance'?'resistance':'undefined'}`}>
                     {r.type}
