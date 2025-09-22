@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { getSupabase } from '@/lib/supabaseClient';
 import Protected from '@/components/Protected';
 import Header from '@/components/Header';
 
@@ -26,13 +26,13 @@ function MSRContent(){
   const [at, setAt] = useState('');
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    getSupabase().auth.getSession().then(({ data }) => setSession(data.session));
   }, []);
 
   useEffect(() => { if (session) fetchRows(); }, [session, symbol]);
 
   async function fetchRows(){
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('hl_lines')
       .select('*')
       .eq('symbol', symbol)
@@ -45,15 +45,12 @@ function MSRContent(){
     const user_id = session.user.id;
     const payload = { user_id, symbol, timeframe, type, price: Number(price) };
     if (at) payload.at = new Date(at).toISOString();
-    const { error } = await supabase.from('hl_lines').insert(payload);
-    if (!error){
-      setPrice(''); setAt('');
-      fetchRows();
-    }
+    const { error } = await getSupabase().from('hl_lines').insert(payload);
+    if (!error){ setPrice(''); setAt(''); fetchRows(); }
   }
 
   async function removeRow(id){
-    await supabase.from('hl_lines').delete().eq('id', id);
+    await getSupabase().from('hl_lines').delete().eq('id', id);
     fetchRows();
   }
 
@@ -63,60 +60,72 @@ function MSRContent(){
   }, [rows, tfFilter]);
 
   return (
-    <main style={{maxWidth:960,margin:'20px auto',padding:16}}>
-      <h2>MSR — Suportes & Resistências</h2>
+    <main className="container">
+      <div className="pane" style={{marginBottom:12}}>
+        <h2>MSR — Suportes &amp; Resistências</h2>
+        <div className="controls" style={{marginTop:10}}>
+          <input placeholder="Preço do ativo" value={price} onChange={e=>setPrice(e.target.value)} />
+          <select value={timeframe} onChange={e=>setTimeframe(e.target.value)}>
+            {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
+          </select>
+          <select value={type} onChange={e=>setType(e.target.value)}>
+            <option value="support">suporte</option>
+            <option value="resistance">resistência</option>
+            <option value="undefined">indefinido</option>
+          </select>
+          <div className="grid-5">
+            <input type="datetime-local" value={at} onChange={e=>setAt(e.target.value)} />
+            <button onClick={addRow}>Gravar</button>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
 
-      <section style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr',gap:8,margin:'12px 0'}}>
-        <input placeholder="Preço do ativo" value={price} onChange={e=>setPrice(e.target.value)} />
-        <select value={timeframe} onChange={e=>setTimeframe(e.target.value)}>
-          {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
-        </select>
-        <select value={type} onChange={e=>setType(e.target.value)}>
-          <option value="support">suporte</option>
-          <option value="resistance">resistência</option>
-          <option value="undefined">indefinido</option>
-        </select>
-        <input type="datetime-local" value={at} onChange={e=>setAt(e.target.value)} />
-        <button onClick={addRow}>Gravar</button>
-      </section>
+      <div className="pane">
+        <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+          <label>Símbolo:</label>
+          <input value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} style={{width:140}} />
+          <label style={{marginLeft:12}}>Filtro TF:</label>
+          <select multiple value={tfFilter} onChange={(e)=>setTfFilter(Array.from(e.target.selectedOptions, o=>o.value))}>
+            {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
+          </select>
+          <button onClick={()=>setTfFilter([])}>Limpar filtro</button>
+        </div>
 
-      <section style={{display:'flex',gap:8,alignItems:'center'}}>
-        <label>Símbolo:</label>
-        <input value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} style={{width:120}} />
-        <label>Filtro TF:</label>
-        <select multiple value={tfFilter} onChange={(e)=>setTfFilter(Array.from(e.target.selectedOptions, o=>o.value))}>
-          {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
-        </select>
-        <button onClick={()=>setTfFilter([])}>Limpar filtro</button>
-      </section>
-
-      <table style={{width:'100%',marginTop:16,borderCollapse:'collapse'}}>
-        <thead>
-          <tr>
-            <th style={{textAlign:'left'}}>Preço</th>
-            <th>TF</th>
-            <th>Tipo</th>
-            <th>Data</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map(r => (
-            <tr key={r.id} style={{borderTop:'1px solid #eee'}}>
-              <td>{Number(r.price).toLocaleString()}</td>
-              <td style={{textAlign:'center'}}>{r.timeframe}</td>
-              <td style={{textAlign:'center', color: r.type==='support'?'green':r.type==='resistance'?'crimson':'#b8860b'}}>{r.type}</td>
-              <td style={{textAlign:'center'}}>{new Date(r.at).toLocaleString('pt-BR')}</td>
-              <td style={{textAlign:'right'}}>
-                <button onClick={()=>removeRow(r.id)}>Excluir</button>
-              </td>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Preço</th>
+              <th className="center">TF</th>
+              <th className="center">Tipo</th>
+              <th className="center">Data</th>
+              <th className="right"></th>
             </tr>
-          ))}
-          {filtered.length === 0 && (
-            <tr><td colSpan={5} style={{padding:12,opacity:.7}}>Nenhuma linha. Adicione com o formulário acima.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filtered.map(r => (
+              <tr key={r.id}>
+                <td>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                <td className="center">{r.timeframe}</td>
+                <td className="center">
+                  <span className={`badge ${r.type==='support'?'support':r.type==='resistance'?'resistance':'undefined'}`}>
+                    {r.type}
+                  </span>
+                </td>
+                <td className="center">{new Date(r.at).toLocaleString('pt-BR')}</td>
+                <td className="right">
+                  <button onClick={()=>removeRow(r.id)}>Excluir</button>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={5} style={{opacity:.7,padding:'12px 8px'}}>Nenhuma linha. Adicione no formulário acima.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }
