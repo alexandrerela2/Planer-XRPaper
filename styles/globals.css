@@ -67,3 +67,9 @@ button:hover{filter:brightness(1.08)}
 
 /* Responsivo */
 @media (max-width:1024px){ .grid-2{grid-template-columns:1fr} .controls{grid-template-columns:1fr} }
+
+/* --- pills para valores numéricos com as mesmas cores das badges --- */
+.pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0b1425}
+.pill.support{color:var(--good); border-color:#205a44; background:#0e2a21}
+.pill.resistance{color:var(--bad); border-color:#6b2224; background:#2b0f12}
+.pill.undefined{color:#b8860b; border-color:#6a4b0d; background:#2a1e0c}
