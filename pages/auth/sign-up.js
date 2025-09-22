@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { getSupabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/router';
 
 export default function SignUp() {
@@ -11,8 +11,9 @@ export default function SignUp() {
   async function onSubmit(e){
     e.preventDefault();
     setError('');
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) setError(error.message); else router.push('/msr');
+    const { error } = await getSupabase().auth.signUp({ email, password });
+    if (error) setError(error.message);
+    else router.push('/msr');
   }
 
   return (
