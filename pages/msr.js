@@ -138,7 +138,7 @@ function MSRContent(){
                       {Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}
                     </span>
                   </td>
-                  <td className="center">{r.timeframe}</td>
+                  <td className="center"><span className="badge tf">{r.timeframe}</span></td>
                   <td className="center">
                     <span className={`badge ${cls}`}>{r.type}</span>
                   </td>
