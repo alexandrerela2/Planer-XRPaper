@@ -1,0 +1,3 @@
+html,body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+input,select,button { padding: 8px; }
+button { cursor: pointer; }
