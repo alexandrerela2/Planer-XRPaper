@@ -1,3 +1,69 @@
-html,body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-input,select,button { padding: 8px; }
-button { cursor: pointer; }
+/* ===== Tema XRPaper (baseado na Calculadora) ===== */
+:root{
+  --bg:#0a1220; --card:#0c1828; --muted:#8aa0bd; --border:#1b2a44;
+  --good:#19c37d; --bad:#ef4146; --warn:#f5a623; --text:#e6efff;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font:14px/1.5 Inter,system-ui,Segoe UI,Roboto,Arial;
+}
+
+/* Contêiner e grid geral */
+.container{max-width:1160px;margin:20px auto;padding:0 16px}
+h1,h2,h3{margin:0 0 12px 0}
+h1{font-size:22px} h2{font-size:18px;color:#c9d4e5} h3{font-size:13px;color:#c9d4e5;letter-spacing:.3px}
+
+/* Cards / panes */
+.pane{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:12px;
+}
+
+/* Inputs e selects */
+input,select,button{
+  font:inherit; color:var(--text);
+  background:#162337; border:1px solid var(--border);
+  border-radius:10px; padding:10px; outline:none;
+}
+input::placeholder{color:#6f86a8}
+button{cursor:pointer; background:#162b46}
+button:hover{filter:brightness(1.08)}
+
+/* Tabela dark */
+.table{
+  width:100%; border-collapse:collapse; margin-top:12px;
+}
+.table th,.table td{
+  padding:10px; border-top:1px solid var(--border);
+}
+.table th{color:#c9d4e5; font-weight:600; text-align:left}
+.table td.center{text-align:center}
+.table td.right{text-align:right}
+
+/* Badges por tipo */
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border);font-size:12px}
+.badge.support{color:var(--good);border-color:#205a44;background:#0e2a21}
+.badge.resistance{color:var(--bad);border-color:#6b2224;background:#2b0f12}
+.badge.undefined{color:#b8860b;border-color:#6a4b0d;background:#2a1e0c}
+
+/* Header */
+.header{
+  display:flex; align-items:center; gap:16px; padding:12px 16px;
+  border-bottom:1px solid var(--border); background:rgba(11,20,37,.6); backdrop-filter:saturate(1.1) blur(6px);
+}
+.header nav{display:flex; gap:12px; margin-left:auto}
+.header a, .header button{color:#aac4e3; background:transparent; border:1px solid var(--border); padding:8px 10px; border-radius:999px; text-decoration:none}
+.header a:hover, .header button:hover{filter:brightness(1.12)}
+
+/* Layouts responsivos parecidos com a calculadora */
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.grid-5{display:grid; grid-template-columns:1fr 1fr 1fr 1fr 1fr; gap:8px}
+.controls{display:grid; grid-template-columns:1fr 120px 220px auto; gap:8px}
+
+/* Responsivo */
+@media (max-width:1024px){ .grid-2{grid-template-columns:1fr} .controls{grid-template-columns:1fr} }
