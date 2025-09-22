@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { getSupabase } from '@/lib/supabaseClient';
 import Protected from '@/components/Protected';
 import Header from '@/components/Header';
 
@@ -27,11 +27,11 @@ function MEContent(){
   const [saved, setSaved] = useState(null);
   const [rows, setRows] = useState([]);
 
-  useEffect(() => { supabase.auth.getSession().then(({data})=>setSession(data.session)); }, []);
+  useEffect(() => { getSupabase().auth.getSession().then(({data})=>setSession(data.session)); }, []);
   useEffect(() => { if (session) fetchRows(); }, [session, symbol, tf]);
 
   async function fetchRows(){
-    const { data } = await supabase
+    const { data } = await getSupabase()
       .from('hl_lines')
       .select('*')
       .eq('symbol', symbol)
@@ -43,9 +43,7 @@ function MEContent(){
   async function save(){
     const user_id = session.user.id;
     const payload = {
-      user_id,
-      symbol,
-      timeframe: tf,
+      user_id, symbol, timeframe: tf,
       price_now: numOrNull(priceNow),
       ema20: numOrNull(ema20),
       ema200: numOrNull(ema200),
@@ -53,7 +51,7 @@ function MEContent(){
       rsi_k: numOrNull(rsiK),
       rsi_d: numOrNull(rsiD)
     };
-    const { data, error } = await supabase.from('strategies').insert(payload).select('*').single();
+    const { data, error } = await getSupabase().from('strategies').insert(payload).select('*').single();
     if (!error) setSaved(data);
   }
 
@@ -64,69 +62,82 @@ function MEContent(){
   ]), [priceNow, ema20, ema200]);
 
   return (
-    <main style={{maxWidth:960,margin:'20px auto',padding:16}}>
-      <h2>ME — Estratégias</h2>
-
-      <section style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,margin:'12px 0'}}>
-        <label> Símbolo <input value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} /></label>
-        <label> Tempo Gráfico
-          <select value={tf} onChange={e=>setTf(e.target.value)}>
-            {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
-          </select>
-        </label>
-        <label> Valor Atual <input value={priceNow} onChange={e=>setPriceNow(e.target.value)} /></label>
-        <label> EMA20 <input value={ema20} onChange={e=>setEma20(e.target.value)} /></label>
-        <label> EMA200 <input value={ema200} onChange={e=>setEma200(e.target.value)} /></label>
-        <label> Volume médio <input value={volAvg} onChange={e=>setVolAvg(e.target.value)} /></label>
-        <label> RSI K <input value={rsiK} onChange={e=>setRsiK(e.target.value)} /></label>
-        <label> RSI D <input value={rsiD} onChange={e=>setRsiD(e.target.value)} /></label>
-        <button onClick={save}>Salvar Valores</button>
-      </section>
+    <main className="container">
+      <div className="pane" style={{marginBottom:12}}>
+        <h2>ME — Estratégias</h2>
+        <div className="grid-2" style={{marginTop:10}}>
+          <div className="grid-2" style={{gap:8}}>
+            <label> Símbolo <input value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} /></label>
+            <label> Tempo Gráfico
+              <select value={tf} onChange={e=>setTf(e.target.value)}>
+                {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
+              </select>
+            </label>
+            <label> Valor Atual <input value={priceNow} onChange={e=>setPriceNow(e.target.value)} /></label>
+            <label> EMA20 <input value={ema20} onChange={e=>setEma20(e.target.value)} /></label>
+            <label> EMA200 <input value={ema200} onChange={e=>setEma200(e.target.value)} /></label>
+            <label> Volume médio <input value={volAvg} onChange={e=>setVolAvg(e.target.value)} /></label>
+            <label> RSI K <input value={rsiK} onChange={e=>setRsiK(e.target.value)} /></label>
+            <label> RSI D <input value={rsiD} onChange={e=>setRsiD(e.target.value)} /></label>
+          </div>
+          <div style={{display:'flex',alignItems:'end'}}>
+            <button onClick={save}>Salvar Valores</button>
+          </div>
+        </div>
+      </div>
 
       {saved && (
-        <div style={{padding:12, background:'#f6f8fa', border:'1px solid #eaecef', borderRadius:8, marginBottom:12}}>
+        <div className="pane" style={{marginBottom:12}}>
           <strong>Resumo salvo:</strong>
-          <div>Volume médio: {saved.vol_avg ?? '-'}</div>
-          <div>RSI K/D: {saved.rsi_k ?? '-'} / {saved.rsi_d ?? '-'}</div>
+          <div style={{marginTop:6, color:'var(--muted)'}}>Volume médio: <b>{saved.vol_avg ?? '-'}</b></div>
+          <div style={{color:'var(--muted)'}}>RSI K/D: <b>{saved.rsi_k ?? '-'}</b> / <b>{saved.rsi_d ?? '-'}</b></div>
         </div>
       )}
 
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
-        <thead>
-          <tr>
-            <th style={{textAlign:'left'}}>Preço</th>
-            <th>TF</th>
-            <th>Tipo</th>
-            <th>Data</th>
-          </tr>
-        </thead>
-        <tbody>
-          {overlay.map((o, idx) => (
-            <tr key={`ov-${idx}`} style={{borderTop:'1px solid #eee', background:'#fffdf5'}}>
-              <td colSpan={2}>{o.label}</td>
-              <td colSpan={2} style={{textAlign:'right'}}>{o.value || '-'}</td>
+      <div className="pane">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Preço</th>
+              <th className="center">TF</th>
+              <th className="center">Tipo</th>
+              <th className="center">Data</th>
             </tr>
-          ))}
-
-          {rows.map(r => (
-            <tr key={r.id} style={{borderTop:'1px solid #eee'}}>
-              <td>{Number(r.price).toLocaleString()}</td>
-              <td style={{textAlign:'center'}}>{r.timeframe}</td>
-              <td style={{textAlign:'center', color: r.type==='support'?'green':r.type==='resistance'?'crimson':'#b8860b'}}>{r.type}</td>
-              <td style={{textAlign:'center'}}>{new Date(r.at).toLocaleString('pt-BR')}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr><td colSpan={4} style={{padding:12,opacity:.7}}>Sem HL para este timeframe.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {/* Linhas informativas (sem edição) */}
+            {overlay.map((o, idx) => (
+              <tr key={`ov-${idx}`} style={{background:'#0b1425'}}>
+                <td colSpan={2}>{o.label}</td>
+                <td colSpan={2} className="right">{o.value || '-'}</td>
+              </tr>
+            ))}
+            {/* HL do timeframe */}
+            {rows.map(r => (
+              <tr key={r.id}>
+                <td>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                <td className="center">{r.timeframe}</td>
+                <td className="center">
+                  <span className={`badge ${r.type==='support'?'support':r.type==='resistance'?'resistance':'undefined'}`}>
+                    {r.type}
+                  </span>
+                </td>
+                <td className="center">{new Date(r.at).toLocaleString('pt-BR')}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Sem HL para este timeframe.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }
 
 function numOrNull(v){
   if (v === '' || v === null || v === undefined) return null;
-  const n = Number(v);
+  const n = Number(String(v).replace(',','.'));
   return Number.isFinite(n) ? n : null;
 }
+
