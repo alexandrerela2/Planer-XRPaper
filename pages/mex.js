@@ -17,19 +17,47 @@ function MEXContent(){
   const router = useRouter();
   const id = router.query.id;
   const [run, setRun] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!id);
+  const [userId, setUserId] = useState(null);
+  const supabase = getSupabase();
 
-  useEffect(() => { if (id) fetchRun(); }, [id]);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setUserId(data.session?.user?.id || null));
+  }, [supabase]);
 
-  async function fetchRun(){
+  useEffect(() => {
+    if (!id) return;        // sem id, estado vazio controlado
+    fetchRun(id);
+  }, [id]);
+
+  async function fetchRun(runId){
     setLoading(true);
-    const { data } = await getSupabase()
+    const { data } = await supabase
       .from('mex_runs')
       .select('*')
-      .eq('id', id)
+      .eq('id', runId)
       .single();
     setRun(data || null);
     setLoading(false);
+  }
+
+  async function openLast(){
+    if (!userId) return;
+    const { data } = await supabase
+      .from('mex_runs')
+      .select('id')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data?.id) {
+      router.push(`/mex?id=${data.id}`);
+    }
+  }
+
+  function gotoME(){
+    router.push('/me');
   }
 
   function formatNum(n){
@@ -37,24 +65,40 @@ function MEXContent(){
     return Number(n).toLocaleString('pt-BR',{maximumFractionDigits:2});
   }
 
-  function badge(cls, text){
-    return <span className={`badge ${cls}`} style={{marginRight:8}}>{text}</span>;
+  // encontra suporte abaixo e resistência acima mais próximos do preço
+  function nearestLevels(run) {
+    if (!run?.hl_rows?.length || !run.price_now) return { support: null, resistance: null };
+    const px = Number(run.price_now);
+    const supports = run.hl_rows.filter(r => r.type === 'support').map(r => Number(r.price));
+    const resistances = run.hl_rows.filter(r => r.type === 'resistance').map(r => Number(r.price));
+
+    const support = supports
+      .filter(p => p <= px)
+      .sort((a,b) => Math.abs(px-a) - Math.abs(px-b))[0] ?? null;
+
+    const resistance = resistances
+      .filter(p => p >= px)
+      .sort((a,b) => Math.abs(px-a) - Math.abs(px-b))[0] ?? null;
+
+    return { support, resistance };
   }
 
-  function gotoME(){
-    if (!run) return;
-    const q = new URLSearchParams();
-    q.set('symbol', run.symbol);
-    q.set('tf', run.timeframe);
-    if (run.date_from) q.set('dateFrom', run.date_from);
-    if (run.date_to) q.set('dateTo', run.date_to);
-    router.push(`/me?${q.toString()}`);
-  }
-
-  async function removeSnapshot(){
-    if(!run) return;
-    await getSupabase().from('mex_runs').delete().eq('id', run.id);
-    router.push('/me');
+  if (!id) {
+    // estado vazio (sem snapshot selecionado)
+    return (
+      <main className="container">
+        <div className="pane" style={{marginBottom:12}}>
+          <h2>MEX — Execução</h2>
+          <p style={{marginTop:8, color:'var(--muted)'}}>
+            Nenhum snapshot carregado ainda. Vá ao módulo <b>ME</b>, clique <b>Calcular</b> e depois <b>Próximo</b> para enviar os valores para cá.
+          </p>
+          <div style={{display:'flex', gap:8, marginTop:8, flexWrap:'wrap'}}>
+            <button onClick={gotoME}>Ir para ME</button>
+            {userId && <button onClick={openLast}>Abrir último snapshot</button>}
+          </div>
+        </div>
+      </main>
+    );
   }
 
   if (loading) {
@@ -64,7 +108,6 @@ function MEXContent(){
     return <main className="container"><div className="pane">Snapshot não encontrado.</div></main>;
   }
 
-  // traduz sinal salvo
   const signalCls = run.mex_signal === 'favoravel' ? 'good' :
                     run.mex_signal === 'desfavoravel' ? 'bad' :
                     run.mex_signal === 'neutro' ? 'warn' : '';
@@ -72,6 +115,16 @@ function MEXContent(){
       ? (run.mex_signal === 'favoravel' ? 'Favorável' :
          run.mex_signal === 'desfavoravel' ? 'Desfavorável' : 'Neutro')
       : '—';
+
+  const { support, resistance } = nearestLevels(run);
+  const px = Number(run.price_now || 0);
+
+  // stops/alvos sugeridos (simples, para iniciante)
+  const stopLong = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
+  const targetLong = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
+
+  const stopShort = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
+  const targetShort = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
 
   return (
     <main className="container">
@@ -94,39 +147,62 @@ function MEXContent(){
         </div>
 
         <div style={{marginTop:10}}>
-          {badge(signalCls, signalTxt)}
+          <span className={`badge ${signalCls || ''}`} style={{marginRight:8}}>{signalTxt}</span>
           <span style={{color:'var(--muted)'}}>Resumo do ME salvo para execução.</span>
         </div>
 
         <div style={{marginTop:10, display:'flex', gap:8, flexWrap:'wrap'}}>
-          <button onClick={gotoME}>Refazer com mesmos parâmetros</button>
-          <button onClick={removeSnapshot}>Excluir snapshot</button>
+          <button onClick={()=>{
+            const q = new URLSearchParams();
+            q.set('symbol', run.symbol);
+            q.set('tf', run.timeframe);
+            if (run.date_from) q.set('dateFrom', run.date_from);
+            if (run.date_to) q.set('dateTo', run.date_to);
+            router.push(`/me?${q.toString()}`);
+          }}>Refazer com mesmos parâmetros</button>
+
+          <button onClick={async ()=>{
+            await supabase.from('mex_runs').delete().eq('id', run.id);
+            router.push('/mex');
+          }}>Excluir snapshot</button>
         </div>
       </div>
 
-      {/* Gatilhos simples */}
+      {/* Gatilhos simples (iniciante) com termos Long/Short */}
       <div className="pane" style={{marginBottom:12}}>
         <h3>Gatilhos simples (iniciante)</h3>
-        <ul style={{marginTop:8}}>
-          <li>
-            <b>Compra por rompimento:</b> espere um candle <b>fechar acima da EMA20</b>;
-            o <b>RSI K deve estar acima do D</b> (cruzamento para cima) e o <b>ATR%</b> precisa
-            <b> aumentar</b> (o mercado acordou). <b>Stop</b>: abaixo da EMA20 ou do suporte mais próximo.
-            <b> Alvo</b>: a resistência mais próxima salva nas HL.
-          </li>
-          <li style={{marginTop:6}}>
-            <b>Venda por rompimento:</b> espere um candle <b>fechar abaixo da EMA200</b>;
-            o <b>RSI K abaixo do D</b> e <b>ATR%</b> subindo. <b>Stop</b>: acima da EMA200 ou da resistência mais próxima.
-            <b> Alvo</b>: suporte mais próximo.
-          </li>
-          <li style={{marginTop:6}}>
-            <b>Scalp no range (ATR% baixo):</b> compre no <b>suporte</b> mais próximo e venda na <b>resistência</b>
-            mais próxima, com <b>stop curto</b>. Evite alvos ambiciosos quando o ATR% estiver muito baixo.
-          </li>
-        </ul>
+        <div style={{marginTop:8}}>
+          <p style={{margin:'8px 0'}}><b>Long (Compra por rompimento)</b></p>
+          <ul>
+            <li>Espere um candle <b>fechar acima da EMA20</b>.</li>
+            <li>O <b>RSI K</b> deve estar <b>acima</b> do <b>D</b> (cruzamento para cima).</li>
+            <li>O <b>ATR%</b> precisa <b>aumentar</b> (mercado “acordando”).</li>
+            <li><b>Stop</b>: {stopLong ? <b>{formatNum(stopLong)}</b> : 'abaixo da EMA20 ou do suporte mais próximo'}</li>
+            <li><b>Alvo</b>: {targetLong ? <b>{formatNum(targetLong)}</b> : 'na resistência mais próxima'}</li>
+          </ul>
+        </div>
+
+        <div style={{marginTop:12}}>
+          <p style={{margin:'8px 0'}}><b>Short (Venda por rompimento)</b></p>
+          <ul>
+            <li>Espere um candle <b>fechar abaixo da EMA200</b>.</li>
+            <li>O <b>RSI K</b> deve estar <b>abaixo</b> do <b>D</b> (cruzamento para baixo).</li>
+            <li>O <b>ATR%</b> precisa <b>aumentar</b>.</li>
+            <li><b>Stop</b>: {stopShort ? <b>{formatNum(stopShort)}</b> : 'acima da EMA200 ou da resistência mais próxima'}</li>
+            <li><b>Alvo</b>: {targetShort ? <b>{formatNum(targetShort)}</b> : 'no suporte mais próximo'}</li>
+          </ul>
+        </div>
+
+        <div style={{marginTop:12}}>
+          <p style={{margin:'8px 0'}}><b>Scalp no range</b> (ATR% baixo)</p>
+          <ul>
+            <li>Comprar no <b>suporte</b> mais próximo e vender na <b>resistência</b> mais próxima.</li>
+            <li>Usar <b>stop curto</b> (o preço anda pouco quando o ATR% está baixo).</li>
+          </ul>
+        </div>
       </div>
 
-      {/* HL usadas no snapshot */}
+      {/* HL do snapshot */}
       <div className="pane">
         <h3>Linhas HL do snapshot</h3>
         <table className="table">
