@@ -22,12 +22,12 @@ function MEXContent() {
   const [userId, setUserId] = useState(null);
 
   const [mode, setMode] = useState('rompimento');   // 'rompimento' | 'pullback'
-  const [showT2, setShowT2] = useState(true);        // switch Mostrar T2
+  const [showT2, setShowT2] = useState(true);       // switch Mostrar T2
 
   const supabase = getSupabase();
   const printRef = useRef(null);
 
-  // ===== helpers =====
+  // helpers
   const fmtNum = (n) => {
     if (n === null || n === undefined || n === '') return '—';
     const num = Number(n);
@@ -42,35 +42,51 @@ function MEXContent() {
   };
   const fmtDate = (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—');
 
-  // ===== carregar usuário & snapshot =====
+  function rrValue(entry, stop, target) {
+    if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return null;
+    const risco = Math.abs(entry - stop);
+    const retorno = Math.abs(target - entry);
+    if (risco <= 0) return null;
+    return retorno / risco;
+  }
+  function rrClass(rr){
+    if (rr == null) return '';
+    return rr >= 2 ? 'good' : 'bad';
+  }
+  const fmtRR = (rr) => rr == null ? '—' : rr.toFixed(2).replace('.', ',');
+
+  // carregar sessão
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setUserId(data.session?.user?.id || null));
   }, [supabase]);
 
+  // carregar snapshot
   useEffect(() => {
     if (!id) return;
     (async () => {
       setLoading(true);
       const { data } = await supabase.from('mex_runs').select('*').eq('id', id).single();
+      // se hl_rows vier texto, converte
+      if (data && typeof data.hl_rows === 'string') {
+        try { data.hl_rows = JSON.parse(data.hl_rows); } catch { data.hl_rows = []; }
+      }
       setRun(data || null);
       setLoading(false);
     })();
   }, [id, supabase]);
 
-  const openLast = async () => {
+  async function openLast(){
     if (!userId) return;
     const { data } = await supabase
-      .from('mex_runs')
-      .select('id')
+      .from('mex_runs').select('id')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1).maybeSingle();
     if (data?.id) router.push(`/mex?id=${data.id}`);
-  };
+  }
   const gotoME = () => router.push('/me');
 
-  // ===== níveis úteis a partir das HL =====
+  // níveis via HL
   function levelTargets(run) {
     if (!run?.hl_rows?.length || !run.price_now) {
       return { suporte1: null, suporte2: null, resistencia1: null, resistencia2: null };
@@ -98,59 +114,75 @@ function MEXContent() {
     return { suporte1, suporte2, resistencia1, resistencia2 };
   }
 
-  // ===== cálculo de stop/targets por modo =====
-  const px = Number(run?.price_now || 0);
-  const { suporte1, suporte2, resistencia1, resistencia2 } = levelTargets(run || {});
+  if (!id) {
+    return (
+      <main className="container">
+        <div className="pane" style={{marginBottom:12}}>
+          <h2>MEX — Execução</h2>
+          <p style={{marginTop:8, color:'var(--muted)'}}>
+            Nenhum snapshot carregado. Vá ao módulo <b>ME</b>, clique <b>Calcular</b> e depois <b>Próximo</b>.
+          </p>
+          <div style={{display:'flex', gap:8, marginTop:8, flexWrap:'wrap'}}>
+            <button onClick={gotoME}>Ir para ME</button>
+            {userId && <button onClick={openLast}>Abrir último snapshot</button>}
+          </div>
+        </div>
+      </main>
+    );
+  }
+  if (loading) return <main className="container"><div className="pane">Carregando…</div></main>;
+  if (!run)     return <main className="container"><div className="pane">Snapshot não encontrado.</div></main>;
 
-  // Rompimento:
-  const stopLongBreak       = suporte1 ?? (Number.isFinite(run?.ema20)  ? Math.min(run.ema20,  px) : null);
-  const targetLongBreakT1   = resistencia1 ?? (Number.isFinite(run?.ema200) ? Math.max(run.ema200, px) : null);
+  const px = Number(run.price_now || 0);
+  const { suporte1, suporte2, resistencia1, resistencia2 } = levelTargets(run);
+
+  // Stops/Targets (fallback com EMAs)
+  const stopLongBreak       = suporte1 ?? (Number.isFinite(run.ema20)  ? Math.min(run.ema20,  px) : null);
+  const targetLongBreakT1   = resistencia1 ?? (Number.isFinite(run.ema200) ? Math.max(run.ema200, px) : null);
   const targetLongBreakT2   = resistencia2 ?? null;
 
-  const stopShortBreak      = resistencia1 ?? (Number.isFinite(run?.ema200) ? Math.max(run.ema200, px) : null);
-  const targetShortBreakT1  = suporte1 ?? (Number.isFinite(run?.ema20)  ? Math.min(run.ema20,  px) : null);
+  const stopShortBreak      = resistencia1 ?? (Number.isFinite(run.ema200) ? Math.max(run.ema200, px) : null);
+  const targetShortBreakT1  = suporte1 ?? (Number.isFinite(run.ema20)  ? Math.min(run.ema20,  px) : null);
   const targetShortBreakT2  = suporte2 ?? null;
 
-  // Pullback:
-  const stopLongPull        = suporte1 ?? (Number.isFinite(run?.ema20)  ? Math.min(run.ema20,  px) : null);
-  const targetLongPullT1    = resistencia1 ?? (Number.isFinite(run?.ema200) ? Math.max(run.ema200, px) : null);
+  const stopLongPull        = suporte1 ?? (Number.isFinite(run.ema20)  ? Math.min(run.ema20,  px) : null);
+  const targetLongPullT1    = resistencia1 ?? (Number.isFinite(run.ema200) ? Math.max(run.ema200, px) : null);
   const targetLongPullT2    = resistencia2 ?? null;
 
-  const stopShortPull       = resistencia1 ?? (Number.isFinite(run?.ema200) ? Math.max(run.ema200, px) : null);
-  const targetShortPullT1   = suporte1 ?? (Number.isFinite(run?.ema20)  ? Math.min(run.ema20,  px) : null);
+  const stopShortPull       = resistencia1 ?? (Number.isFinite(run.ema200) ? Math.max(run.ema200, px) : null);
+  const targetShortPullT1   = suporte1 ?? (Number.isFinite(run.ema20)  ? Math.min(run.ema20,  px) : null);
   const targetShortPullT2   = suporte2 ?? null;
 
-  // ===== RR (Risco/Retorno) =====
-  function rrLong(entry, stop, target) {
-    if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return null;
-    const risco   = entry - stop;           // só faz sentido se stop < entry
-    const retorno = target - entry;
-    if (risco <= 0) return null;
-    return retorno / risco;
-  }
-  function rrShort(entry, stop, target) {
-    if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return null;
-    const risco   = stop - entry;           // só faz sentido se stop > entry
-    const retorno = entry - target;
-    if (risco <= 0) return null;
-    return retorno / risco;
-  }
-  const fmtRR = (v) => (v == null ? '—' : v.toFixed(2).replace('.', ','));
+  // RR com entrada = price_now
+  const rrLB1 = rrValue(px, stopLongBreak,  targetLongBreakT1);
+  const rrLB2 = rrValue(px, stopLongBreak,  targetLongBreakT2);
+  const rrSB1 = rrValue(px, stopShortBreak, targetShortBreakT1);
+  const rrSB2 = rrValue(px, stopShortBreak, targetShortBreakT2);
 
-  // Rompimento RR
-  const rrLongBreakT1  = rrLong(px,  stopLongBreak,  targetLongBreakT1);
-  const rrLongBreakT2  = rrLong(px,  stopLongBreak,  targetLongBreakT2);
-  const rrShortBreakT1 = rrShort(px, stopShortBreak, targetShortBreakT1);
-  const rrShortBreakT2 = rrShort(px, stopShortBreak, targetShortBreakT2);
+  const rrLP1 = rrValue(px, stopLongPull,   targetLongPullT1);
+  const rrLP2 = rrValue(px, stopLongPull,   targetLongPullT2);
+  const rrSP1 = rrValue(px, stopShortPull,  targetShortPullT1);
+  const rrSP2 = rrValue(px, stopShortPull,  targetShortPullT2);
 
-  // Pullback RR
-  const rrLongPullT1   = rrLong(px,  stopLongPull,  targetLongPullT1);
-  const rrLongPullT2   = rrLong(px,  stopLongPull,  targetLongPullT2);
-  const rrShortPullT1  = rrShort(px, stopShortPull, targetShortPullT1);
-  const rrShortPullT2  = rrShort(px, stopShortPull, targetShortPullT2);
+  // sinal do ME (badge)
+  const signalCls =
+    run.mex_signal === 'favoravel'   ? 'good' :
+    run.mex_signal === 'desfavoravel'? 'bad'  :
+    run.mex_signal === 'neutro'      ? 'warn' : '';
+  const signalTxt = run.mex_signal
+    ? (run.mex_signal === 'favoravel' ? 'Favorável' :
+       run.mex_signal === 'desfavoravel' ? 'Desfavorável' : 'Neutro')
+    : '—';
 
-  // ===== export PDF =====
-  function exportPDF() {
+  // chip VWAP
+  const vwapChip = Number.isFinite(run?.vwap)
+    ? (px > run.vwap
+        ? <span className="chip good">Acima da VWAP</span>
+        : (px < run.vwap ? <span className="chip bad">Abaixo da VWAP</span> : <span className="chip">Na VWAP</span>)
+      )
+    : null;
+
+  function exportPDF(){
     const node = printRef.current;
     if (!node) return;
     const html = `
@@ -171,36 +203,6 @@ function MEXContent() {
     w.document.open(); w.document.write(html); w.document.close(); w.focus(); w.print();
   }
 
-  // ===== estados da tela =====
-  if (!id) {
-    return (
-      <main className="container">
-        <div className="pane" style={{ marginBottom: 12 }}>
-          <h2>MEX — Execução</h2>
-          <p style={{ marginTop: 8, color: 'var(--muted)' }}>
-            Nenhum snapshot carregado ainda. Vá ao módulo <b>ME</b>, clique <b>Calcular</b> e depois <b>Próximo</b> para enviar os valores para cá.
-          </p>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <button onClick={gotoME}>Ir para ME</button>
-            {userId && <button onClick={openLast}>Abrir último snapshot</button>}
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (loading)   return <main className="container"><div className="pane">Carregando…</div></main>;
-  if (!run)      return <main className="container"><div className="pane">Snapshot não encontrado.</div></main>;
-
-  const signalCls =
-    run.mex_signal === 'favoravel'   ? 'good' :
-    run.mex_signal === 'desfavoravel'? 'bad'  :
-    run.mex_signal === 'neutro'      ? 'warn' : '';
-  const signalTxt = run.mex_signal
-    ? (run.mex_signal === 'favoravel' ? 'Favorável' :
-       run.mex_signal === 'desfavoravel' ? 'Desfavorável' : 'Neutro')
-    : '—';
-
   return (
     <main className="container">
       <div className="pane" style={{ marginBottom: 12 }}>
@@ -214,8 +216,7 @@ function MEXContent() {
               value="rompimento"
               checked={mode === 'rompimento'}
               onChange={() => setMode('rompimento')}
-            />
-            Rompimento
+            /> Rompimento
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <input
@@ -224,25 +225,20 @@ function MEXContent() {
               value="pullback"
               checked={mode === 'pullback'}
               onChange={() => setMode('pullback')}
-            />
-            Pullback
+            /> Pullback
           </label>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={showT2}
-              onChange={(e) => setShowT2(e.target.checked)}
-            />
-            Mostrar T2
+            <input type="checkbox" checked={showT2} onChange={(e)=>setShowT2(e.target.checked)} /> Mostrar T2
           </label>
 
           <button onClick={exportPDF} style={{ marginLeft: 'auto' }}>Exportar PDF</button>
         </div>
 
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 10, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
           <span className={`badge ${signalCls || ''}`} style={{ marginRight: 8 }}>{signalTxt}</span>
           <span style={{ color: 'var(--muted)' }}>Resumo do ME salvo para execução.</span>
+          {vwapChip}
         </div>
       </div>
 
@@ -252,37 +248,36 @@ function MEXContent() {
         <div className="pane" style={{ marginBottom: 12 }}>
           <h3>Resumo</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 10 }}>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>Símbolo</label><div>{run.symbol || '—'}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>Tempo Gráfico</label><div>{run.timeframe || '—'}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>Período</label><div>{fmtDate(run.date_from)} → {fmtDate(run.date_to)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>Símbolo</label><div>{run.symbol || '—'}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>Tempo Gráfico</label><div>{run.timeframe || '—'}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>Período</label><div>{fmtDate(run.date_from)} → {fmtDate(run.date_to)}</div></div>
 
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>Preço</label><div>{fmtNum(run.price_now)}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>ATR%</label><div>{fmtPct(run.atr_pct)}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>RSI K/D</label><div>{fmtNum(run.rsi_k)} / {fmtNum(run.rsi_d)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>Preço</label><div>{fmtNum(run.price_now)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>ATR%</label><div>{fmtPct(run.atr_pct)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>RSI K/D</label><div>{fmtNum(run.rsi_k)} / {fmtNum(run.rsi_d)}</div></div>
 
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>EMA20</label><div>{fmtNum(run.ema20)}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>EMA200</label><div>{fmtNum(run.ema200)}</div></div>
-            <div><label style={{ color: 'var(--muted)', fontSize: 12 }}>Volume médio</label><div>{fmtNum(run.vol_avg)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>EMA20</label><div>{fmtNum(run.ema20)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>EMA200</label><div>{fmtNum(run.ema200)}</div></div>
+            <div><label style={{ color:'var(--muted)', fontSize:12 }}>VWAP</label><div>{fmtNum(run.vwap)}</div></div>
           </div>
         </div>
 
-        {/* Gatilhos simples + RR */}
+        {/* Gatilhos + RR colorido */}
         <div className="pane" style={{ marginBottom: 12 }}>
           <h3>Gatilhos simples ({mode === 'rompimento' ? 'Rompimento' : 'Pullback'}) — iniciante</h3>
 
           {mode === 'rompimento' ? (
             <>
-              {/* LONG Rompimento */}
+              {/* LONG */}
               <div style={{ marginTop: 8 }}>
-                <p style={{ margin: '8px 0' }}><b>Long (Compra por rompimento)</b></p>
+                <p style={{ margin:'8px 0' }}><b>Long (Compra por rompimento)</b></p>
                 <ul>
-                  <li>Espere um candle <b>fechar acima da EMA20</b>.</li>
-                  <li>O <b>RSI K</b> deve estar <b>acima</b> do <b>D</b>.</li>
-                  <li>O <b>ATR%</b> precisa <b>aumentar</b>.</li>
+                  <li>Fechamento acima da EMA20. Se <b>preço &gt; VWAP</b>, é um ponto a favor do Long.</li>
+                  <li>RSI K acima do D; ATR% aumentando.</li>
                   <li>
-                    <b>Stop</b>: {stopLongBreak ? <b>{fmtNum(stopLongBreak)}</b> : 'abaixo da EMA20/suporte'} •
-                    <b> RR T1:</b> {fmtRR(rrLongBreakT1)}
-                    {showT2 && <> • <b>RR T2:</b> {fmtRR(rrLongBreakT2)}</>}
+                    <b>Stop</b>: {stopLongBreak ? <b>{fmtNum(stopLongBreak)}</b> : 'abaixo da EMA20/suporte'} •{' '}
+                    <b>RR T1:</b> <span className={rrClass(rrLB1)}>{fmtRR(rrLB1)}</span>
+                    {showT2 && <> • <b>RR T2:</b> <span className={rrClass(rrLB2)}>{fmtRR(rrLB2)}</span></>}
                   </li>
                   <li>
                     <b>Alvo T1</b>: {targetLongBreakT1 ? <b>{fmtNum(targetLongBreakT1)}</b> : 'resistência mais próxima'}
@@ -291,17 +286,16 @@ function MEXContent() {
                 </ul>
               </div>
 
-              {/* SHORT Rompimento */}
+              {/* SHORT */}
               <div style={{ marginTop: 12 }}>
-                <p style={{ margin: '8px 0' }}><b>Short (Venda por rompimento)</b></p>
+                <p style={{ margin:'8px 0' }}><b>Short (Venda por rompimento)</b></p>
                 <ul>
-                  <li>Espere um candle <b>fechar abaixo da EMA200</b>.</li>
-                  <li>O <b>RSI K</b> deve estar <b>abaixo</b> do <b>D</b>.</li>
-                  <li>O <b>ATR%</b> precisa <b>aumentar</b>.</li>
+                  <li>Fechamento abaixo da EMA200. Se <b>preço &lt; VWAP</b>, é um ponto a favor do Short.</li>
+                  <li>RSI K abaixo do D; ATR% aumentando.</li>
                   <li>
-                    <b>Stop</b>: {stopShortBreak ? <b>{fmtNum(stopShortBreak)}</b> : 'acima da EMA200/resistência'} •
-                    <b> RR T1:</b> {fmtRR(rrShortBreakT1)}
-                    {showT2 && <> • <b>RR T2:</b> {fmtRR(rrShortBreakT2)}</>}
+                    <b>Stop</b>: {stopShortBreak ? <b>{fmtNum(stopShortBreak)}</b> : 'acima da EMA200/resistência'} •{' '}
+                    <b>RR T1:</b> <span className={rrClass(rrSB1)}>{fmtRR(rrSB1)}</span>
+                    {showT2 && <> • <b>RR T2:</b> <span className={rrClass(rrSB2)}>{fmtRR(rrSB2)}</span></>}
                   </li>
                   <li>
                     <b>Alvo T1</b>: {targetShortBreakT1 ? <b>{fmtNum(targetShortBreakT1)}</b> : 'suporte mais próximo'}
@@ -314,15 +308,14 @@ function MEXContent() {
             <>
               {/* LONG Pullback */}
               <div style={{ marginTop: 8 }}>
-                <p style={{ margin: '8px 0' }}><b>Long (Compra por pullback)</b></p>
+                <p style={{ margin:'8px 0' }}><b>Long (Compra por pullback)</b></p>
                 <ul>
-                  <li>Preço já <b>acima da EMA20</b> (tendência curta de alta).</li>
-                  <li>Espere um <b>recuo</b> até a EMA20 ou o <b>suporte</b> mais próximo.</li>
-                  <li>Entre quando o <b>RSI K</b> cruzar <b>acima</b> do <b>D</b> novamente.</li>
+                  <li>Preço acima da EMA20; recuo até EMA20/suporte. Se <b>preço &gt; VWAP</b>, reforça o Long.</li>
+                  <li>RSI K cruza acima de D novamente.</li>
                   <li>
-                    <b>Stop</b>: {stopLongPull ? <b>{fmtNum(stopLongPull)}</b> : 'abaixo da EMA20/suporte testado'} •
-                    <b> RR T1:</b> {fmtRR(rrLongPullT1)}
-                    {showT2 && <> • <b>RR T2:</b> {fmtRR(rrLongPullT2)}</>}
+                    <b>Stop</b>: {stopLongPull ? <b>{fmtNum(stopLongPull)}</b> : 'abaixo da EMA20/suporte'} •{' '}
+                    <b>RR T1:</b> <span className={rrClass(rrLP1)}>{fmtRR(rrLP1)}</span>
+                    {showT2 && <> • <b>RR T2:</b> <span className={rrClass(rrLP2)}>{fmtRR(rrLP2)}</span></>}
                   </li>
                   <li>
                     <b>Alvo T1</b>: {targetLongPullT1 ? <b>{fmtNum(targetLongPullT1)}</b> : 'resistência mais próxima'}
@@ -333,15 +326,14 @@ function MEXContent() {
 
               {/* SHORT Pullback */}
               <div style={{ marginTop: 12 }}>
-                <p style={{ margin: '8px 0' }}><b>Short (Venda por pullback)</b></p>
+                <p style={{ margin:'8px 0' }}><b>Short (Venda por pullback)</b></p>
                 <ul>
-                  <li>Preço já <b>abaixo da EMA200</b> (tendência mais longa de baixa).</li>
-                  <li>Espere um <b>repique</b> até a <b>resistência</b> mais próxima ou até a EMA200.</li>
-                  <li>Entre quando o <b>RSI K</b> cruzar <b>abaixo</b> do <b>D</b> novamente.</li>
+                  <li>Preço abaixo da EMA200; repique até resistência/EMA200. Se <b>preço &lt; VWAP</b>, reforça o Short.</li>
+                  <li>RSI K cruza abaixo de D novamente.</li>
                   <li>
-                    <b>Stop</b>: {stopShortPull ? <b>{fmtNum(stopShortPull)}</b> : 'acima da EMA200/resistência testada'} •
-                    <b> RR T1:</b> {fmtRR(rrShortPullT1)}
-                    {showT2 && <> • <b>RR T2:</b> {fmtRR(rrShortPullT2)}</>}
+                    <b>Stop</b>: {stopShortPull ? <b>{fmtNum(stopShortPull)}</b> : 'acima da EMA200/resistência'} •{' '}
+                    <b>RR T1:</b> <span className={rrClass(rrSP1)}>{fmtRR(rrSP1)}</span>
+                    {showT2 && <> • <b>RR T2:</b> <span className={rrClass(rrSP2)}>{fmtRR(rrSP2)}</span></>}
                   </li>
                   <li>
                     <b>Alvo T1</b>: {targetShortPullT1 ? <b>{fmtNum(targetShortPullT1)}</b> : 'suporte mais próximo'}
@@ -380,7 +372,7 @@ function MEXContent() {
                 );
               })}
               {(!run.hl_rows || run.hl_rows.length === 0) && (
-                <tr><td colSpan={4} style={{ opacity: .7, padding: '12px 8px' }}>Nenhuma HL no snapshot.</td></tr>
+                <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Nenhuma HL no snapshot.</td></tr>
               )}
             </tbody>
           </table>
@@ -389,3 +381,4 @@ function MEXContent() {
     </main>
   );
 }
+
