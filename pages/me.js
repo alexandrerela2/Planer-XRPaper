@@ -101,16 +101,16 @@ export default function ME() {
 
       try {
         const tfAlts = tfVariants(tf); // aceita 5m, 5, 05, 300s...
-        // Monta string do .or() para tf
-        // Ex.: "tf.eq.5m,tf.eq.5,tf.eq.05,tf.eq.300s"
-        const orTf = tfAlts.map((t) => `tf.eq.${t}`).join(",");
+        // Monta string do .or() para timeframe
+        // Ex.: "timeframe.eq.5m,timeframe.eq.5,timeframe.eq.05,timeframe.eq.300s"
+        const orTf = tfAlts.map((t) => `timeframe.eq.${t}`).join(",");
 
         // Busca por símbolo e qualquer um dos TFs aceitos
         // (Não filtramos por data aqui porque as colunas podem variar;
         //  vamos filtrar por data do lado do cliente com getRowDate().)
         const query = supabase
           .from("hl_lines")
-          .select("id, price, tf, type, kind, created_at, at, ts, timestamp, time, date")
+          .select("id, price, timeframe, type, kind, created_at, at, ts, timestamp, time, date")
           .eq("symbol", symbol);
 
         if (orTf) query.or(orTf);
@@ -183,7 +183,7 @@ export default function ME() {
         mex_signal: status,
         hl_rows: (hlList || []).map((h) => ({
           price: h.price,
-          timeframe: h.tf,
+          timeframe: h.timeframe,                        // <- usa timeframe
           type: getRowType(h),
           at: (getRowDate(h) || new Date()).toISOString(),
         })),
@@ -338,7 +338,7 @@ export default function ME() {
           </form>
         </section>
 
-        {/* HL usadas (opcional) — puxadas do MSR pelo TF+período */}
+        {/* HL usadas (opcional) — puxadas do MSR pelo timeframe+período */}
         <section className="card">
           <h3 className="card-title">HL usadas (opcional)</h3>
           {hlList?.length === 0 ? (
@@ -354,7 +354,7 @@ export default function ME() {
               {hlList.map((h) => (
                 <div className="trow" key={h.id}>
                   <div>{Number(h.price).toLocaleString("pt-BR")}</div>
-                  <div><span className="pill">{h.tf}</span></div>
+                  <div><span className="pill">{h.timeframe}</span></div>
                   <div><span className={`pill ${typePill(getRowType(h))}`}>{getRowType(h)}</span></div>
                   <div>{(getRowDate(h) || new Date()).toLocaleString("pt-BR")}</div>
                 </div>
@@ -413,4 +413,3 @@ function typePill(t) {
   if (t === "resistance") return "red";
   return "yellow";
 }
-
