@@ -7,15 +7,14 @@ import { getSupabase } from "@/lib/supabaseClient";
 
 const TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
+// Helpers de data (sem libs externas)
 function toIso(v) {
   if (!v) return null;
   const d = v instanceof Date ? v : new Date(v);
   if (isNaN(d.getTime())) return null;
   return d.toISOString();
 }
-
 function toLocalInputValue(v) {
-  // formata para datetime-local: YYYY-MM-DDTHH:mm
   const d = v instanceof Date ? v : new Date(v);
   if (isNaN(d.getTime())) return "";
   const pad = (n) => String(n).padStart(2, "0");
@@ -26,12 +25,41 @@ function toLocalInputValue(v) {
   const mi = pad(d.getMinutes());
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
-
 function fromLocalInputValue(str) {
-  // recebe "YYYY-MM-DDTHH:mm" e devolve Date
   if (!str) return null;
   const d = new Date(str);
   return isNaN(d.getTime()) ? null : d;
+}
+
+// Normaliza TF para possíveis formatos salvos no MSR
+function tfVariants(tf) {
+  // "5m" -> ["5m","5","05","300s"]
+  if (!tf) return [];
+  const m = tf.endsWith("m") ? parseInt(tf) : tf === "1h" ? 60 : tf === "4h" ? 240 : null;
+  const variants = [];
+  if (tf) variants.push(tf);                 // "5m"
+  if (m != null) {
+    variants.push(String(m));                // "5"
+    variants.push(String(m).padStart(2,"0"));// "05"
+    variants.push(String(m*60)+"s");         // "300s"
+  }
+  return [...new Set(variants)];
+}
+
+// Pega o timestamp de um registro, aceitando múltiplas colunas
+function getRowDate(row) {
+  const candidates = [row?.created_at, row?.at, row?.ts, row?.timestamp, row?.time, row?.date];
+  for (const c of candidates) {
+    if (!c) continue;
+    const d = new Date(c);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
+// Pega o tipo de linha aceitando "type" ou "kind"
+function getRowType(row) {
+  return row?.type ?? row?.kind ?? "undefined";
 }
 
 export default function ME() {
@@ -49,8 +77,8 @@ export default function ME() {
   const [to, setTo] = useState(() => new Date());
 
   // valores (copiados da corretora)
-  const [price, setPrice] = useState("");   // preço atual
-  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto (NÃO %)
+  const [price, setPrice] = useState("");
+  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto
   const [rsiK, setRsiK] = useState("");
   const [rsiD, setRsiD] = useState("");
   const [ema20, setEma20] = useState("");
@@ -67,27 +95,49 @@ export default function ME() {
   // carregar HLs ao mudar symbol/tf/período
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       if (!symbol || !tf || !from || !to) return;
-      const fromIso = toIso(from);
-      const toIsoStr = toIso(to);
+
       try {
-        const { data, error } = await supabase
+        const tfAlts = tfVariants(tf); // aceita 5m, 5, 05, 300s...
+        // Monta string do .or() para tf
+        // Ex.: "tf.eq.5m,tf.eq.5,tf.eq.05,tf.eq.300s"
+        const orTf = tfAlts.map((t) => `tf.eq.${t}`).join(",");
+
+        // Busca por símbolo e qualquer um dos TFs aceitos
+        // (Não filtramos por data aqui porque as colunas podem variar;
+        //  vamos filtrar por data do lado do cliente com getRowDate().)
+        const query = supabase
           .from("hl_lines")
-          .select("id, price, tf, type, created_at")
-          .eq("symbol", symbol)
-          .eq("tf", tf)
-          .gte("created_at", fromIso)
-          .lte("created_at", toIsoStr)
-          .order("price", { ascending: false });
+          .select("id, price, tf, type, kind, created_at, at, ts, timestamp, time, date")
+          .eq("symbol", symbol);
+
+        if (orTf) query.or(orTf);
+
+        query.order("price", { ascending: false });
+
+        const { data, error } = await query;
 
         if (error) throw error;
-        if (!cancelled) setHlList(data || []);
+
+        // Filtro de período no cliente aceitando múltiplas colunas de data
+        const fromMs = +from;
+        const toMs = +to;
+        const filtered = (data || []).filter((row) => {
+          const d = getRowDate(row);
+          if (!d) return false;
+          const t = +d;
+          return t >= fromMs && t <= toMs;
+        });
+
+        if (!cancelled) setHlList(filtered);
       } catch (err) {
         console.error("Erro ao carregar HLs:", err.message || err);
         if (!cancelled) setHlList([]);
       }
     })();
+
     return () => { cancelled = true; };
   }, [symbol, tf, from, to, supabase]);
 
@@ -123,7 +173,7 @@ export default function ME() {
         date_from: toIso(from),
         date_to: toIso(to),
         price_now: Number(price) || null,
-        atr_abs: Number(atrAbs) || null, // ATR absoluto salvo aqui
+        atr_abs: Number(atrAbs) || null,
         rsi_k: Number(rsiK) || null,
         rsi_d: Number(rsiD) || null,
         ema20: Number(ema20) || null,
@@ -134,8 +184,8 @@ export default function ME() {
         hl_rows: (hlList || []).map((h) => ({
           price: h.price,
           timeframe: h.tf,
-          type: h.type,
-          at: h.created_at,
+          type: getRowType(h),
+          at: (getRowDate(h) || new Date()).toISOString(),
         })),
       };
 
@@ -236,7 +286,7 @@ export default function ME() {
                 <input
                   value={rsiK}
                   onChange={(e) => setRsiK(e.target.value)}
-                  placeholder="ex.: 34.96"
+                  placeholder="ex.: 43.41"
                 />
               </div>
 
@@ -245,7 +295,7 @@ export default function ME() {
                 <input
                   value={rsiD}
                   onChange={(e) => setRsiD(e.target.value)}
-                  placeholder="ex.: 51.54"
+                  placeholder="ex.: 47.94"
                 />
               </div>
 
@@ -254,7 +304,7 @@ export default function ME() {
                 <input
                   value={volAvg}
                   onChange={(e) => setVolAvg(e.target.value)}
-                  placeholder="ex.: 9.71"
+                  placeholder="ex.: 8.684"
                 />
               </div>
 
@@ -263,7 +313,7 @@ export default function ME() {
                 <input
                   value={ema20}
                   onChange={(e) => setEma20(e.target.value)}
-                  placeholder="ex.: 112927"
+                  placeholder="ex.: 112043"
                 />
               </div>
 
@@ -272,7 +322,7 @@ export default function ME() {
                 <input
                   value={ema200}
                   onChange={(e) => setEma200(e.target.value)}
-                  placeholder="ex.: 112809"
+                  placeholder="ex.: 112335"
                 />
               </div>
 
@@ -305,8 +355,8 @@ export default function ME() {
                 <div className="trow" key={h.id}>
                   <div>{Number(h.price).toLocaleString("pt-BR")}</div>
                   <div><span className="pill">{h.tf}</span></div>
-                  <div><span className={`pill ${typePill(h.type)}`}>{h.type || "undefined"}</span></div>
-                  <div>{new Date(h.created_at).toLocaleString("pt-BR")}</div>
+                  <div><span className={`pill ${typePill(getRowType(h))}`}>{getRowType(h)}</span></div>
+                  <div>{(getRowDate(h) || new Date()).toLocaleString("pt-BR")}</div>
                 </div>
               ))}
             </div>
