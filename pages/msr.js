@@ -25,21 +25,39 @@ function MSRContent(){
   const [type, setType] = useState('support');
   const [at, setAt] = useState('');
 
-  // FILTRO TF — agora select simples (igual ao cadastro)
-  const [tfFilter, setTfFilter] = useState(''); // '' = sem filtro
+  // filtro TF e período
+  const [tfFilter, setTfFilter] = useState(''); // '' = todos
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   useEffect(() => {
     getSupabase().auth.getSession().then(({ data }) => setSession(data.session));
   }, []);
 
-  useEffect(() => { if (session) fetchRows(); }, [session, symbol]);
+  useEffect(() => { if (session) fetchRows(); }, [session, symbol, tfFilter, dateFrom, dateTo]);
+
+  function toIsoOrNull(v){
+    if(!v) return null;
+    const d = new Date(v);
+    return isNaN(+d) ? null : d.toISOString();
+  }
 
   async function fetchRows(){
-    const { data, error } = await getSupabase()
+    let q = getSupabase()
       .from('hl_lines')
       .select('*')
-      .eq('symbol', symbol)
-      .order('price', { ascending: false });
+      .eq('symbol', symbol);
+
+    if (tfFilter) q = q.eq('timeframe', tfFilter);
+
+    const fIso = toIsoOrNull(dateFrom);
+    const tIso = toIsoOrNull(dateTo);
+    if (fIso) q = q.gte('at', fIso);
+    if (tIso) q = q.lte('at', tIso);
+
+    q = q.order('price', { ascending: false });
+
+    const { data, error } = await q;
     if (!error) setRows(data || []);
   }
 
@@ -49,10 +67,7 @@ function MSRContent(){
     const payload = { user_id, symbol, timeframe, type, price: Number(String(price).replace(',','.')) };
     if (at) payload.at = new Date(at).toISOString();
     const { error } = await getSupabase().from('hl_lines').insert(payload);
-    if (!error){
-      setPrice(''); setAt('');
-      fetchRows();
-    }
+    if (!error){ setPrice(''); setAt(''); fetchRows(); }
   }
 
   async function removeRow(id){
@@ -60,11 +75,7 @@ function MSRContent(){
     fetchRows();
   }
 
-  // aplica filtro simples
-  const filtered = useMemo(() => {
-    if (!tfFilter) return rows;
-    return rows.filter(r => r.timeframe === tfFilter);
-  }, [rows, tfFilter]);
+  const filtered = useMemo(() => rows, [rows]);
 
   return (
     <main className="container">
@@ -73,22 +84,15 @@ function MSRContent(){
         <h2>MSR — Suportes &amp; Resistências</h2>
 
         <div className="controls" style={{marginTop:10}}>
-          <input
-            placeholder="Preço do ativo"
-            value={price}
-            onChange={e=>setPrice(e.target.value)}
-          />
-          {/* TF igual ao cadastro */}
+          <input placeholder="Preço do ativo" value={price} onChange={e=>setPrice(e.target.value)} />
           <select value={timeframe} onChange={e=>setTimeframe(e.target.value)}>
             {TF_OPTIONS.map(t => <option key={t}>{t}</option>)}
           </select>
-
           <select value={type} onChange={e=>setType(e.target.value)}>
             <option value="support">suporte</option>
             <option value="resistance">resistência</option>
             <option value="undefined">indefinido</option>
           </select>
-
           <div className="grid-5">
             <input type="datetime-local" value={at} onChange={e=>setAt(e.target.value)} />
             <button onClick={addRow}>Gravar</button>
@@ -97,26 +101,33 @@ function MSRContent(){
         </div>
       </div>
 
-      {/* Painel de listagem + filtros */}
-      <div className="pane">
-        <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
-          <label>Símbolo:</label>
-          <input
-            value={symbol}
-            onChange={e=>setSymbol(e.target.value.toUpperCase())}
-            style={{width:140}}
-          />
-
-          <label style={{marginLeft:12}}>Filtro TF:</label>
-          {/* ⬇️ Agora igual ao cadastro: select simples */}
-          <select value={tfFilter} onChange={e=>setTfFilter(e.target.value)}>
-            <option value="">(todos)</option>
-            {TF_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-
-          <button onClick={()=>setTfFilter('')}>Limpar filtro</button>
+      {/* Filtros */}
+      <div className="pane" style={{marginBottom:12}}>
+        <div style={{display:'grid', gridTemplateColumns:'160px 160px 200px 200px auto', gap:8}}>
+          <div style={{display:'flex', alignItems:'center', gap:8}}>
+            <label>TF:</label>
+            <select value={tfFilter} onChange={e=>setTfFilter(e.target.value)}>
+              <option value="">(todos)</option>
+              {TF_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <span></span>
+          <div>
+            <label style={{display:'block', fontSize:12, color:'var(--muted)'}}>De</label>
+            <input type="datetime-local" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+          </div>
+          <div>
+            <label style={{display:'block', fontSize:12, color:'var(--muted)'}}>Até</label>
+            <input type="datetime-local" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+          </div>
+          <div style={{display:'flex', alignItems:'end'}}>
+            <button onClick={()=>{ setDateFrom(''); setDateTo(''); }}>Limpar período</button>
+          </div>
         </div>
+      </div>
 
+      {/* Tabela */}
+      <div className="pane">
         <table className="table">
           <thead>
             <tr>
@@ -132,25 +143,16 @@ function MSRContent(){
               const cls = r.type==='support' ? 'support' : (r.type==='resistance' ? 'resistance' : 'undefined');
               return (
                 <tr key={r.id}>
-                  {/* ⬇️ Preço com a MESMA paleta do TIPO */}
-                  <td>
-                    <span className={`pill ${cls}`}>
-                      {Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}
-                    </span>
-                  </td>
+                  <td><span className={`pill ${cls}`}>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</span></td>
                   <td className="center"><span className="badge tf">{r.timeframe}</span></td>
-                  <td className="center">
-                    <span className={`badge ${cls}`}>{r.type}</span>
-                  </td>
+                  <td className="center"><span className={`badge ${cls}`}>{r.type}</span></td>
                   <td className="center">{new Date(r.at).toLocaleString('pt-BR')}</td>
-                  <td className="right">
-                    <button onClick={()=>removeRow(r.id)}>Excluir</button>
-                  </td>
+                  <td className="right"><button onClick={()=>removeRow(r.id)}>Excluir</button></td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={5} style={{opacity:.7,padding:'12px 8px'}}>Nenhuma linha. Adicione no formulário acima.</td></tr>
+              <tr><td colSpan={5} style={{opacity:.7,padding:'12px 8px'}}>Sem resultados para os filtros aplicados.</td></tr>
             )}
           </tbody>
         </table>
