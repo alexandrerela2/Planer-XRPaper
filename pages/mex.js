@@ -59,35 +59,45 @@ function MEXContent(){
     }
   }
 
-  function gotoME(){
-    router.push('/me');
-  }
+  function gotoME(){ router.push('/me'); }
 
   function formatNum(n){
     if(n === null || n === undefined) return '—';
     return Number(n).toLocaleString('pt-BR',{maximumFractionDigits:2});
   }
 
-  // encontra suporte abaixo e resistência acima mais próximos do preço
-  function nearestLevels(run) {
-    if (!run?.hl_rows?.length || !run.price_now) return { support: null, resistance: null };
+  // ======= Níveis úteis a partir das HL =======
+  // retorna: suporte1, suporte2 (abaixo do preço), resistencia1, resistencia2 (acima do preço)
+  function levelTargets(run) {
+    if (!run?.hl_rows?.length || !run.price_now) {
+      return { suporte1:null, suporte2:null, resistencia1:null, resistencia2:null };
+    }
     const px = Number(run.price_now);
-    const supports = run.hl_rows.filter(r => r.type === 'support').map(r => Number(r.price));
-    const resistances = run.hl_rows.filter(r => r.type === 'resistance').map(r => Number(r.price));
+    const supports = run.hl_rows
+      .filter(r => r.type === 'support')
+      .map(r => Number(r.price))
+      .filter(n => Number.isFinite(n))
+      .sort((a,b) => b - a); // desc
+    const resistances = run.hl_rows
+      .filter(r => r.type === 'resistance')
+      .map(r => Number(r.price))
+      .filter(n => Number.isFinite(n))
+      .sort((a,b) => a - b); // asc
 
-    const support = supports
-      .filter(p => p <= px)
-      .sort((a,b) => Math.abs(px-a) - Math.abs(px-b))[0] ?? null;
+    // os dois suportes abaixo (mais próximos)
+    const supsAbaixo = supports.filter(p => p <= px);
+    const suporte1 = supsAbaixo[0] ?? null;
+    const suporte2 = supsAbaixo[1] ?? null;
 
-    const resistance = resistances
-      .filter(p => p >= px)
-      .sort((a,b) => Math.abs(px-a) - Math.abs(px-b))[0] ?? null;
+    // as duas resistências acima (mais próximas)
+    const ressAcima = resistances.filter(p => p >= px);
+    const resistencia1 = ressAcima[0] ?? null;
+    const resistencia2 = ressAcima[1] ?? null;
 
-    return { support, resistance };
+    return { suporte1, suporte2, resistencia1, resistencia2 };
   }
 
   function exportPDF(){
-    // abre uma janela só com o conteúdo imprimível e dispara a impressão (o navegador salva em PDF)
     const node = printRef.current;
     if (!node) return;
     const html = `
@@ -149,22 +159,31 @@ function MEXContent(){
          run.mex_signal === 'desfavoravel' ? 'Desfavorável' : 'Neutro')
       : '—';
 
-  const { support, resistance } = nearestLevels(run);
+  const { suporte1, suporte2, resistencia1, resistencia2 } = levelTargets(run);
   const px = Number(run.price_now || 0);
 
-  // stops/alvos sugeridos (simples, para iniciante)
-  const stopLongBreak = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
-  const targetLongBreak = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
+  // ======= Stops e Alvos (com HL) =======
+  // Rompimento:
+  //  - Long: Stop no suporte1 (ou EMA20) / Alvo T1 na resistência1 (ou EMA200) e T2 na resistência2
+  //  - Short: Stop na resistência1 (ou EMA200) / Alvo T1 no suporte1 (ou EMA20) e T2 no suporte2
+  const stopLongBreak = (suporte1 ?? (run.ema20 != null ? Math.min(run.ema20, px) : null));
+  const targetLongBreakT1 = (resistencia1 ?? (run.ema200 != null ? Math.max(run.ema200, px) : null));
+  const targetLongBreakT2 = (resistencia2 ?? null);
 
-  const stopShortBreak = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
-  const targetShortBreak = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
+  const stopShortBreak = (resistencia1 ?? (run.ema200 != null ? Math.max(run.ema200, px) : null));
+  const targetShortBreakT1 = (suporte1 ?? (run.ema20 != null ? Math.min(run.ema20, px) : null));
+  const targetShortBreakT2 = (suporte2 ?? null);
 
-  // Pullback: usa a lógica do "puxa-e-volta"
-  const stopLongPull = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
-  const targetLongPull = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
+  // Pullback:
+  //  - Long: Stop no suporte testado (suporte1) / Alvo T1 na resistência1 (ou EMA200) e T2 na resistência2
+  //  - Short: Stop na resistência testada (resistência1) / Alvo T1 no suporte1 (ou EMA20) e T2 no suporte2
+  const stopLongPull = (suporte1 ?? (run.ema20 != null ? Math.min(run.ema20, px) : null));
+  const targetLongPullT1 = (resistencia1 ?? (run.ema200 != null ? Math.max(run.ema200, px) : null));
+  const targetLongPullT2 = (resistencia2 ?? null);
 
-  const stopShortPull = resistance != null ? resistance : (run.ema200 != null ? Math.max(run.ema200, px) : null);
-  const targetShortPull = support != null ? support : (run.ema20 != null ? Math.min(run.ema20, px) : null);
+  const stopShortPull = (resistencia1 ?? (run.ema200 != null ? Math.max(run.ema200, px) : null));
+  const targetShortPullT1 = (suporte1 ?? (run.ema20 != null ? Math.min(run.ema20, px) : null));
+  const targetShortPullT2 = (suporte2 ?? null);
 
   return (
     <main className="container">
@@ -225,7 +244,7 @@ function MEXContent(){
           </div>
         </div>
 
-        {/* Gatilhos simples com Long/Short e modo escolhido */}
+        {/* Gatilhos simples com Long/Short e modo escolhido (alvos nas HL) */}
         <div className="pane" style={{marginBottom:12}}>
           <h3>Gatilhos simples ({mode === 'rompimento' ? 'Rompimento' : 'Pullback'}) — iniciante</h3>
 
@@ -238,7 +257,8 @@ function MEXContent(){
                   <li>O <b>RSI K</b> deve estar <b>acima</b> do <b>D</b> (cruzamento para cima).</li>
                   <li>O <b>ATR%</b> precisa <b>aumentar</b> (mercado “acordando”).</li>
                   <li><b>Stop</b>: {stopLongBreak ? <b>{formatNum(stopLongBreak)}</b> : 'abaixo da EMA20 ou do suporte mais próximo'}</li>
-                  <li><b>Alvo</b>: {targetLongBreak ? <b>{formatNum(targetLongBreak)}</b> : 'na resistência mais próxima'}</li>
+                  <li><b>Alvo T1</b>: {targetLongBreakT1 ? <b>{formatNum(targetLongBreakT1)}</b> : 'na resistência mais próxima'}</li>
+                  {targetLongBreakT2 && <li><b>Alvo T2</b>: <b>{formatNum(targetLongBreakT2)}</b> (resistência seguinte)</li>}
                 </ul>
               </div>
 
@@ -249,7 +269,8 @@ function MEXContent(){
                   <li>O <b>RSI K</b> deve estar <b>abaixo</b> do <b>D</b> (cruzamento para baixo).</li>
                   <li>O <b>ATR%</b> precisa <b>aumentar</b>.</li>
                   <li><b>Stop</b>: {stopShortBreak ? <b>{formatNum(stopShortBreak)}</b> : 'acima da EMA200 ou da resistência mais próxima'}</li>
-                  <li><b>Alvo</b>: {targetShortBreak ? <b>{formatNum(targetShortBreak)}</b> : 'no suporte mais próximo'}</li>
+                  <li><b>Alvo T1</b>: {targetShortBreakT1 ? <b>{formatNum(targetShortBreakT1)}</b> : 'no suporte mais próximo'}</li>
+                  {targetShortBreakT2 && <li><b>Alvo T2</b>: <b>{formatNum(targetShortBreakT2)}</b> (suporte seguinte)</li>}
                 </ul>
               </div>
             </>
@@ -259,10 +280,11 @@ function MEXContent(){
                 <p style={{margin:'8px 0'}}><b>Long (Compra por pullback)</b></p>
                 <ul>
                   <li>Primeiro, o preço já deve estar <b>acima</b> da <b>EMA20</b> (tendência de alta curta).</li>
-                  <li>Espere um <b>recuo</b> (candle(s) contra a alta) até a <b>EMA20</b> ou até o <b>suporte</b> mais próximo.</li>
+                  <li>Espere um <b>recuo</b> até a <b>EMA20</b> ou até o <b>suporte</b> mais próximo.</li>
                   <li>Entre quando o <b>RSI K cruzar acima do D</b> outra vez (retomada da força).</li>
                   <li><b>Stop</b>: {stopLongPull ? <b>{formatNum(stopLongPull)}</b> : 'logo abaixo da EMA20 ou do suporte testado'}</li>
-                  <li><b>Alvo</b>: {targetLongPull ? <b>{formatNum(targetLongPull)}</b> : 'na resistência mais próxima'}</li>
+                  <li><b>Alvo T1</b>: {targetLongPullT1 ? <b>{formatNum(targetLongPullT1)}</b> : 'na resistência mais próxima'}</li>
+                  {targetLongPullT2 && <li><b>Alvo T2</b>: <b>{formatNum(targetLongPullT2)}</b> (resistência seguinte)</li>}
                 </ul>
               </div>
 
@@ -270,10 +292,11 @@ function MEXContent(){
                 <p style={{margin:'8px 0'}}><b>Short (Venda por pullback)</b></p>
                 <ul>
                   <li>O preço já deve estar <b>abaixo</b> da <b>EMA200</b> (tendência de baixa mais longa).</li>
-                  <li>Espere um <b>repique</b> (alta contra a tendência) até a <b>resistência</b> mais próxima ou até a <b>EMA200</b>.</li>
-                  <li>Entre quando o <b>RSI K cruzar abaixo do D</b> novamente (força vendedora voltando).</li>
+                  <li>Espere um <b>repique</b> até a <b>resistência</b> mais próxima ou até a <b>EMA200</b>.</li>
+                  <li>Entre quando o <b>RSI K cruzar abaixo do D</b> novamente.</li>
                   <li><b>Stop</b>: {stopShortPull ? <b>{formatNum(stopShortPull)}</b> : 'logo acima da EMA200 ou da resistência testada'}</li>
-                  <li><b>Alvo</b>: {targetShortPull ? <b>{formatNum(targetShortPull)}</b> : 'no suporte mais próximo'}</li>
+                  <li><b>Alvo T1</b>: {targetShortPullT1 ? <b>{formatNum(targetShortPullT1)}</b> : 'no suporte mais próximo'}</li>
+                  {targetShortPullT2 && <li><b>Alvo T2</b>: <b>{formatNum(targetShortPullT2)}</b> (suporte seguinte)</li>}
                 </ul>
               </div>
             </>
@@ -314,3 +337,4 @@ function MEXContent(){
     </main>
   );
 }
+
