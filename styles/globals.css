@@ -113,3 +113,16 @@ button:hover{filter:brightness(1.08)}
   .form-grid{ grid-template-columns: 1fr; }
   .form-actions{ justify-content:stretch }
 }
+
+/* linhas da tabela mais confortáveis */
+.table th, .table td { padding: 12px 10px; }
+
+/* borda mais sutil, aproxima do tema da calculadora */
+.pane { border-color: #16243b; }
+.table td, .table th { border-top-color: #16243b; }
+
+/* hover suave na linha para leitura */
+.table tbody tr:hover { background: rgba(14, 31, 54, .35); }
+
+/* botões pill mais “respiráveis” */
+button { border-radius: 999px; padding: 10px 14px; }
