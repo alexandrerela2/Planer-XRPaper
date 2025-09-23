@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import { getSupabase } from '@/lib/supabaseClient';
 import Protected from '@/components/Protected';
 import Header from '@/components/Header';
@@ -15,37 +16,34 @@ export default function ME(){
 }
 
 function MEContent(){
+  const router = useRouter();
   const [session, setSession] = useState(null);
 
   // filtros / formulário
   const [symbol, setSymbol] = useState('BTCUSDT');
   const [tf, setTf] = useState('5m');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   const [priceNow, setPriceNow] = useState('');
   const [ema20, setEma20] = useState('');
   const [ema200, setEma200] = useState('');
-  const [atr, setAtr] = useState('');          // NOVO CAMPO
+  const [atr, setAtr] = useState('');
   const [volAvg, setVolAvg] = useState('');
   const [rsiK, setRsiK] = useState('');
   const [rsiD, setRsiD] = useState('');
 
-  const [rowsHL, setRowsHL] = useState([]);   // HL filtradas por TF
-  const [saved, setSaved] = useState(null);
+  const [rowsHL, setRowsHL] = useState([]);   // HL filtradas
+  const [signal, setSignal] = useState({ tag:'—', cls:'', detail:'' });
 
   useEffect(() => { getSupabase().auth.getSession().then(({data})=>setSession(data.session)); }, []);
-  useEffect(() => { if (session) fetchHL(); }, [session, symbol, tf]);
+  useEffect(() => { if (session) fetchHL(); }, [session, symbol, tf, dateFrom, dateTo]);
 
-  async function fetchHL(){
-    // HL do símbolo RESPEITANDO o TF selecionado
-    const { data } = await getSupabase()
-      .from('hl_lines')
-      .select('*')
-      .eq('symbol', symbol)
-      .eq('timeframe', tf)
-      .order('price', { ascending: false });
-    setRowsHL(data || []);
+  function toIsoOrNull(v){
+    if(!v) return null;
+    const d = new Date(v);
+    return isNaN(+d) ? null : d.toISOString();
   }
-
   function numOrNull(v){
     if (v === '' || v === null || v === undefined) return null;
     const s0 = String(v).trim().replace(/\s+/g,'').replace(/%/g,'');
@@ -59,23 +57,50 @@ function MEContent(){
     return Number.isFinite(n) ? n : null;
   }
 
-  async function save(){
-    const user_id = session.user.id;
-    const payload = {
-      user_id, symbol, timeframe: tf,
-      price_now: numOrNull(priceNow),
-      ema20: numOrNull(ema20),
-      ema200: numOrNull(ema200),
-      vol_avg: numOrNull(volAvg),
-      rsi_k: numOrNull(rsiK),
-      rsi_d: numOrNull(rsiD),
-      atr: numOrNull(atr)           // opcional salvar, se quiser acompanhar depois
-    };
-    const { data, error } = await getSupabase().from('strategies').insert(payload).select('*').single();
-    if (!error) setSaved(data);
+  async function fetchHL(){
+    let q = getSupabase()
+      .from('hl_lines')
+      .select('*')
+      .eq('symbol', symbol)
+      .eq('timeframe', tf);
+
+    const fIso = toIsoOrNull(dateFrom);
+    const tIso = toIsoOrNull(dateTo);
+    if (fIso) q = q.gte('at', fIso);
+    if (tIso) q = q.lte('at', tIso);
+
+    q = q.order('price', { ascending: false });
+
+    const { data } = await q;
+    setRowsHL(data || []);
   }
 
-  // === OVERLAYS (linhas sintéticas) — intercaladas por preço dentro do TF selecionado ===
+  // === Calcular sinal (mantém função do antigo "Salvar Valores")
+  function calcular(){
+    const px = numOrNull(priceNow);
+    const atrNum = numOrNull(atr);
+    const k = numOrNull(rsiK), d = numOrNull(rsiD);
+    const vol = numOrNull(volAvg);
+
+    if (px === null || atrNum === null) {
+      setSignal({ tag:'—', cls:'', detail:'Preencha Valor Atual e ATR' });
+      return;
+    }
+
+    const atrPct = (atrNum/px)*100; // ATR como % do preço
+    let cls = 'warn', tag = 'Neutro', reason = [];
+
+    if (atrPct >= 1 && k !== null && d !== null && k > d && k >= 50 && k <= 80) { cls = 'good'; tag = 'Favorável'; }
+    else if (atrPct < 0.5 || (k !== null && d !== null && k < d)) { cls = 'bad'; tag = 'Desfavorável'; }
+
+    if (vol !== null) reason.push(`Vol≈${vol}`);
+    if (k !== null && d !== null) reason.push(`RSI ${k}/${d}`);
+    reason.push(`ATR% ${atrPct.toFixed(2).replace('.',',')}%`);
+
+    setSignal({ tag, cls, detail: reason.join(' · ') });
+  }
+
+  // === Overlays (linhas sintéticas) — intercaladas por preço dentro do TF + período
   const overlays = useMemo(() => {
     const arr = [];
     const pn = numOrNull(priceNow);
@@ -109,34 +134,56 @@ function MEContent(){
     return all;
   }, [rowsHL, overlays, tf]);
 
-  // === Resultado/Sinal com ATR + Volume + RSI (no card superior) ===
-  const signal = useMemo(() => {
+  // === Próximo: salvar snapshot e abrir MEX
+  async function proximo(){
+    const supabase = getSupabase();
+    const user_id = session.user.id;
+
     const px = numOrNull(priceNow);
     const atrNum = numOrNull(atr);
     const k = numOrNull(rsiK), d = numOrNull(rsiD);
+    const e20 = numOrNull(ema20), e200 = numOrNull(ema200);
     const vol = numOrNull(volAvg);
 
-    if (px === null || atrNum === null) return { tag: '—', cls: '' , detail: 'Preencha Valor Atual e ATR' };
+    const atrPct = (px && atrNum) ? (atrNum/px)*100 : null;
 
-    const atrPct = (atrNum/px)*100; // ATR como % do preço
-    let cls = 'warn', tag = 'Neutro', reason = [];
+    // traduz classe do sinal para texto
+    let mex_signal = null;
+    if (signal.cls === 'good') mex_signal = 'favoravel';
+    else if (signal.cls === 'bad') mex_signal = 'desfavoravel';
+    else if (signal.cls === 'warn') mex_signal = 'neutro';
 
-    // Heurística simples, ajustável depois:
-    if (atrPct >= 1 && k !== null && d !== null && k > d && k >= 50 && k <= 80) { cls = 'good'; tag = 'Favorável'; }
-    else if (atrPct < 0.5 || (k !== null && d !== null && k < d)) { cls = 'bad'; tag = 'Desfavorável'; }
+    // pega somente as HL reais que estão visíveis (já filtradas por TF/período)
+    const hlReal = (rowsHL || []).map(r => ({
+      id: r.id, price: r.price, timeframe: r.timeframe, type: r.type, at: r.at
+    }));
 
-    if (vol !== null) reason.push(`Vol≈${vol}`);
-    if (k !== null && d !== null) reason.push(`RSI ${k}/${d}`);
-    reason.push(`ATR% ${atrPct.toFixed(2).replace('.',',')}%`);
+    const { data, error } = await supabase
+      .from('mex_runs')
+      .insert({
+        user_id, symbol, timeframe: tf,
+        price_now: px, ema20: e20, ema200: e200,
+        atr: atrNum, vol_avg: vol, rsi_k: k, rsi_d: d,
+        atr_pct: atrPct, mex_signal,
+        date_from: toIsoOrNull(dateFrom),
+        date_to: toIsoOrNull(dateTo),
+        hl_rows: hlReal
+      })
+      .select('id')
+      .single();
 
-    return { tag, cls, detail: reason.join(' · ') };
-  }, [priceNow, atr, rsiK, rsiD, volAvg]);
+    if (!error && data?.id){
+      router.push(`/mex?id=${data.id}`);
+    }
+  }
 
   return (
     <main className="container">
-      {/* FORM: grid agradável e responsivo (tema da calculadora) */}
+      {/* FORM: card superior */}
       <div className="pane" style={{marginBottom:12}}>
         <h2>ME — Estratégias</h2>
+
+        {/* Linha 1: símbolo, TF, Valor Atual */}
         <div className="form-grid" style={{marginTop:10}}>
           <div>
             <label> Símbolo </label>
@@ -153,6 +200,7 @@ function MEContent(){
             <input value={priceNow} onChange={e=>setPriceNow(e.target.value)} />
           </div>
 
+          {/* Linha 2: EMA20, EMA200, ATR */}
           <div>
             <label> EMA20 </label>
             <input value={ema20} onChange={e=>setEma20(e.target.value)} />
@@ -166,6 +214,7 @@ function MEContent(){
             <input value={atr} onChange={e=>setAtr(e.target.value)} />
           </div>
 
+          {/* Linha 3: Volume, RSI K, RSI D */}
           <div>
             <label> Volume médio </label>
             <input value={volAvg} onChange={e=>setVolAvg(e.target.value)} />
@@ -179,8 +228,20 @@ function MEContent(){
             <input value={rsiD} onChange={e=>setRsiD(e.target.value)} />
           </div>
 
-          <div className="form-actions">
-            <button onClick={save}>Salvar Valores</button>
+          {/* Linha 4: Filtro de datas (como no MSR) */}
+          <div>
+            <label> De </label>
+            <input type="datetime-local" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+          </div>
+          <div>
+            <label> Até </label>
+            <input type="datetime-local" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+          </div>
+
+          {/* Ações */}
+          <div className="form-actions" style={{gap:8, flexWrap:'wrap'}}>
+            <button onClick={calcular}>Calcular</button>
+            <button onClick={proximo}>Próximo</button>
           </div>
         </div>
 
@@ -191,15 +252,7 @@ function MEContent(){
         </div>
       </div>
 
-      {saved && (
-        <div className="pane" style={{marginBottom:12}}>
-          <strong>Resumo salvo:</strong>
-          <div style={{marginTop:6, color:'var(--muted)'}}>Volume médio: <b>{saved.vol_avg ?? '-'}</b></div>
-          <div style={{color:'var(--muted)'}}>RSI K/D: <b>{saved.rsi_k ?? '-'}</b> / <b>{saved.rsi_d ?? '-'}</b></div>
-        </div>
-      )}
-
-      {/* LISTA: HL apenas do TF selecionado + overlays intercalados por preço */}
+      {/* LISTA: HL do TF + período selecionados + overlays por preço */}
       <div className="pane">
         <table className="table">
           <thead>
@@ -230,7 +283,7 @@ function MEContent(){
               );
             })}
             {mergedRows.length === 0 && (
-              <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Sem HL para este timeframe.</td></tr>
+              <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Sem HL para o filtro atual.</td></tr>
             )}
           </tbody>
         </table>
