@@ -1,23 +1,56 @@
+// pages/me.js
 import { useEffect, useMemo, useState } from "react";
-import dayjs from "dayjs";
-import { createClient } from "@/lib/supabaseClient";
+import { useRouter } from "next/router";
 import Protected from "@/components/Protected";
 import Header from "@/components/Header";
+import { getSupabase } from "@/lib/supabaseClient";
 
-const supabase = createClient();
+const TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
-const TF_OPTIONS = ["1m","5m","15m","30m","1h","4h","1d"];
+function toIso(v) {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function toLocalInputValue(v) {
+  // formata para datetime-local: YYYY-MM-DDTHH:mm
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+function fromLocalInputValue(str) {
+  // recebe "YYYY-MM-DDTHH:mm" e devolve Date
+  if (!str) return null;
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 export default function ME() {
-  // Filtros básicos
+  const router = useRouter();
+  const supabase = getSupabase();
+
+  // filtros
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [tf, setTf] = useState("5m");
-  const [from, setFrom] = useState(dayjs().startOf("day").toDate());
-  const [to, setTo] = useState(new Date());
+  const [from, setFrom] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+  const [to, setTo] = useState(() => new Date());
 
-  // Campos (copiados da corretora)
-  const [price, setPrice] = useState("");     // preço atual
-  const [atrAbs, setAtrAbs] = useState("");   // ATR absoluto (NÃO %)
+  // valores (copiados da corretora)
+  const [price, setPrice] = useState("");   // preço atual
+  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto (NÃO %)
   const [rsiK, setRsiK] = useState("");
   const [rsiD, setRsiD] = useState("");
   const [ema20, setEma20] = useState("");
@@ -26,33 +59,39 @@ export default function ME() {
   const [volAvg, setVolAvg] = useState("");
 
   // HL vindas do MSR
-  const [hlList, setHlList] = useState([]);   // linhas encontradas no período/TF
+  const [hlList, setHlList] = useState([]);
+
+  // status simples (didático)
   const [status, setStatus] = useState("Neutro");
 
-  // Carrega HLs do MSR sempre que TF/símbolo/período mudar
+  // carregar HLs ao mudar symbol/tf/período
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       if (!symbol || !tf || !from || !to) return;
+      const fromIso = toIso(from);
+      const toIsoStr = toIso(to);
       try {
         const { data, error } = await supabase
           .from("hl_lines")
           .select("id, price, tf, type, created_at")
           .eq("symbol", symbol)
           .eq("tf", tf)
-          .gte("created_at", dayjs(from).toISOString())
-          .lte("created_at", dayjs(to).toISOString())
+          .gte("created_at", fromIso)
+          .lte("created_at", toIsoStr)
           .order("price", { ascending: false });
 
         if (error) throw error;
-        setHlList(data || []);
+        if (!cancelled) setHlList(data || []);
       } catch (err) {
-        console.error("Erro ao carregar HLs:", err.message);
-        setHlList([]);
+        console.error("Erro ao carregar HLs:", err.message || err);
+        if (!cancelled) setHlList([]);
       }
     })();
-  }, [symbol, tf, from, to]);
+    return () => { cancelled = true; };
+  }, [symbol, tf, from, to, supabase]);
 
-  // Cálculo do “humor” simples só para feedback (não grava nada)
+  // “humor” didático
   const mood = useMemo(() => {
     const p = Number(price);
     const e20 = Number(ema20);
@@ -61,31 +100,29 @@ export default function ME() {
     const d = Number(rsiD);
 
     let score = 0;
-    if (p && e20 && p > e20) score += 1;
-    if (p && e200 && p > e200) score += 1;
-    if (k && d && k > d) score += 1;
-    if (Number(atrAbs) > 0) score += 1; // ATR acordado
+    if (Number.isFinite(p) && Number.isFinite(e20) && p > e20) score += 1;
+    if (Number.isFinite(p) && Number.isFinite(e200) && p > e200) score += 1;
+    if (Number.isFinite(k) && Number.isFinite(d) && k > d) score += 1;
+    if (Number(atrAbs) > 0) score += 1;
 
     if (score >= 3) return "Favorável";
     if (score <= 1) return "Desfavorável";
     return "Neutro";
   }, [price, ema20, ema200, rsiK, rsiD, atrAbs]);
 
-  // “Calcular” mantém tudo na tela (não grava). Só atualiza o “status”
   function handleCalcular(e) {
     e.preventDefault();
     setStatus(mood);
   }
 
-  // “Próximo” tira um snapshot no Supabase para o MEX consumir
   async function handleProximo() {
     try {
       const payload = {
         symbol,
-        tf,
-        from_ts: dayjs(from).toISOString(),
-        to_ts: dayjs(to).toISOString(),
-        price: Number(price) || null,
+        timeframe: tf,
+        date_from: toIso(from),
+        date_to: toIso(to),
+        price_now: Number(price) || null,
         atr_abs: Number(atrAbs) || null, // ATR absoluto salvo aqui
         rsi_k: Number(rsiK) || null,
         rsi_d: Number(rsiD) || null,
@@ -93,17 +130,15 @@ export default function ME() {
         ema200: Number(ema200) || null,
         vwap: Number(vwap) || null,
         vol_avg: Number(volAvg) || null,
-        status_me: status,
-        // Incluímos as HL usadas no período/TF atual
-        hl_snapshot: (hlList || []).map((h) => ({
+        mex_signal: status,
+        hl_rows: (hlList || []).map((h) => ({
           price: h.price,
-          tf: h.tf,
+          timeframe: h.tf,
           type: h.type,
-          created_at: h.created_at,
+          at: h.created_at,
         })),
       };
 
-      // Tabela de snapshots usada pelo MEX (ajuste o nome se o seu já existe)
       const { data, error } = await supabase
         .from("mex_runs")
         .insert(payload)
@@ -111,10 +146,9 @@ export default function ME() {
         .single();
       if (error) throw error;
 
-      // Redireciona para o MEX com o id do snapshot
-      window.location.href = `/mex?id=${data.id}`;
+      router.push(`/mex?id=${data.id}`);
     } catch (err) {
-      alert("Erro ao salvar snapshot: " + err.message);
+      alert("Erro ao salvar snapshot: " + (err.message || err));
     }
   }
 
@@ -149,8 +183,8 @@ export default function ME() {
               <label>De</label>
               <input
                 type="datetime-local"
-                value={dayjs(from).format("YYYY-MM-DDTHH:mm")}
-                onChange={(e) => setFrom(new Date(e.target.value))}
+                value={toLocalInputValue(from)}
+                onChange={(e) => setFrom(fromLocalInputValue(e.target.value))}
               />
             </div>
 
@@ -158,8 +192,8 @@ export default function ME() {
               <label>Até</label>
               <input
                 type="datetime-local"
-                value={dayjs(to).format("YYYY-MM-DDTHH:mm")}
-                onChange={(e) => setTo(new Date(e.target.value))}
+                value={toLocalInputValue(to)}
+                onChange={(e) => setTo(fromLocalInputValue(e.target.value))}
               />
             </div>
           </div>
@@ -269,29 +303,30 @@ export default function ME() {
               </div>
               {hlList.map((h) => (
                 <div className="trow" key={h.id}>
-                  <div>{Number(h.price).toLocaleString()}</div>
+                  <div>{Number(h.price).toLocaleString("pt-BR")}</div>
                   <div><span className="pill">{h.tf}</span></div>
                   <div><span className={`pill ${typePill(h.type)}`}>{h.type || "undefined"}</span></div>
-                  <div>{dayjs(h.created_at).format("DD/MM/YYYY, HH:mm:ss")}</div>
+                  <div>{new Date(h.created_at).toLocaleString("pt-BR")}</div>
                 </div>
               ))}
             </div>
           )}
         </section>
       </main>
+
       <style jsx>{`
         .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
         .title { font-size: 22px; margin: 8px 0 18px; }
         .card { background:#0e1623; border:1px solid #1e2a3d; border-radius:12px; padding:16px; margin-bottom:16px; }
         .card-title { margin:0 0 12px; font-size:16px; opacity:.9; }
-        label { display:block; margin-bottom:6px; font-size:13px; opacity:.8;}
+        label { display:block; margin-bottom:6px; font-size:13px; opacity:.8; }
         input, select { width:100%; background:#0b1320; border:1px solid #243048; color:#cfe0ff; border-radius:10px; padding:10px 12px; height:40px; }
         .grid-4 { display:grid; gap:12px; grid-template-columns: repeat(4, 1fr); }
         .grid-3 { display:grid; gap:12px; grid-template-columns: repeat(3, 1fr); }
-        .row-actions { display:flex; gap:10px; margin-top:12px; }
+        .row-actions { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
         .btn { background:#18243a; border:1px solid #2b3b57; color:#d9e6ff; border-radius:10px; padding:10px 16px; height:40px; }
         .btn.primary { background:#1a4fff; border-color:#1a4fff; color:#fff; }
-        .statusBox { display:flex; align-items:flex-end; }
+        .statusBox { display:flex; align-items:flex-end; justify-content:flex-end; }
         .badge { padding:6px 10px; border-radius:999px; font-size:12px; }
         .ok { background:#0f5132; color:#d1f7e3; }
         .warn { background:#4d2f00; color:#ffd8a8; }
@@ -323,9 +358,9 @@ function statusBadge(s) {
   if (s === "Desfavorável") return "bad";
   return "warn";
 }
-
 function typePill(t) {
   if (t === "support") return "green";
   if (t === "resistance") return "red";
   return "yellow";
 }
+
