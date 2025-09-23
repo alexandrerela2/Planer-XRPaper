@@ -1,192 +1,331 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
-import Protected from '@/components/Protected';
-import Header from '@/components/Header';
-import { getSupabase } from '@/lib/supabaseClient';
+import { useEffect, useMemo, useState } from "react";
+import dayjs from "dayjs";
+import { createClient } from "@/lib/supabaseClient";
+import Protected from "@/components/Protected";
+import Header from "@/components/Header";
+
+const supabase = createClient();
+
+const TF_OPTIONS = ["1m","5m","15m","30m","1h","4h","1d"];
 
 export default function ME() {
+  // Filtros básicos
+  const [symbol, setSymbol] = useState("BTCUSDT");
+  const [tf, setTf] = useState("5m");
+  const [from, setFrom] = useState(dayjs().startOf("day").toDate());
+  const [to, setTo] = useState(new Date());
+
+  // Campos (copiados da corretora)
+  const [price, setPrice] = useState("");     // preço atual
+  const [atrAbs, setAtrAbs] = useState("");   // ATR absoluto (NÃO %)
+  const [rsiK, setRsiK] = useState("");
+  const [rsiD, setRsiD] = useState("");
+  const [ema20, setEma20] = useState("");
+  const [ema200, setEma200] = useState("");
+  const [vwap, setVwap] = useState("");
+  const [volAvg, setVolAvg] = useState("");
+
+  // HL vindas do MSR
+  const [hlList, setHlList] = useState([]);   // linhas encontradas no período/TF
+  const [status, setStatus] = useState("Neutro");
+
+  // Carrega HLs do MSR sempre que TF/símbolo/período mudar
+  useEffect(() => {
+    (async () => {
+      if (!symbol || !tf || !from || !to) return;
+      try {
+        const { data, error } = await supabase
+          .from("hl_lines")
+          .select("id, price, tf, type, created_at")
+          .eq("symbol", symbol)
+          .eq("tf", tf)
+          .gte("created_at", dayjs(from).toISOString())
+          .lte("created_at", dayjs(to).toISOString())
+          .order("price", { ascending: false });
+
+        if (error) throw error;
+        setHlList(data || []);
+      } catch (err) {
+        console.error("Erro ao carregar HLs:", err.message);
+        setHlList([]);
+      }
+    })();
+  }, [symbol, tf, from, to]);
+
+  // Cálculo do “humor” simples só para feedback (não grava nada)
+  const mood = useMemo(() => {
+    const p = Number(price);
+    const e20 = Number(ema20);
+    const e200 = Number(ema200);
+    const k = Number(rsiK);
+    const d = Number(rsiD);
+
+    let score = 0;
+    if (p && e20 && p > e20) score += 1;
+    if (p && e200 && p > e200) score += 1;
+    if (k && d && k > d) score += 1;
+    if (Number(atrAbs) > 0) score += 1; // ATR acordado
+
+    if (score >= 3) return "Favorável";
+    if (score <= 1) return "Desfavorável";
+    return "Neutro";
+  }, [price, ema20, ema200, rsiK, rsiD, atrAbs]);
+
+  // “Calcular” mantém tudo na tela (não grava). Só atualiza o “status”
+  function handleCalcular(e) {
+    e.preventDefault();
+    setStatus(mood);
+  }
+
+  // “Próximo” tira um snapshot no Supabase para o MEX consumir
+  async function handleProximo() {
+    try {
+      const payload = {
+        symbol,
+        tf,
+        from_ts: dayjs(from).toISOString(),
+        to_ts: dayjs(to).toISOString(),
+        price: Number(price) || null,
+        atr_abs: Number(atrAbs) || null, // ATR absoluto salvo aqui
+        rsi_k: Number(rsiK) || null,
+        rsi_d: Number(rsiD) || null,
+        ema20: Number(ema20) || null,
+        ema200: Number(ema200) || null,
+        vwap: Number(vwap) || null,
+        vol_avg: Number(volAvg) || null,
+        status_me: status,
+        // Incluímos as HL usadas no período/TF atual
+        hl_snapshot: (hlList || []).map((h) => ({
+          price: h.price,
+          tf: h.tf,
+          type: h.type,
+          created_at: h.created_at,
+        })),
+      };
+
+      // Tabela de snapshots usada pelo MEX (ajuste o nome se o seu já existe)
+      const { data, error } = await supabase
+        .from("mex_runs")
+        .insert(payload)
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      // Redireciona para o MEX com o id do snapshot
+      window.location.href = `/mex?id=${data.id}`;
+    } catch (err) {
+      alert("Erro ao salvar snapshot: " + err.message);
+    }
+  }
+
   return (
     <Protected>
       <Header />
-      <MEContent />
+      <main className="container">
+        <h1 className="title">ME — Módulo de Estudo</h1>
+
+        {/* Filtros topo */}
+        <section className="card">
+          <div className="grid-4">
+            <div>
+              <label>Símbolo</label>
+              <input
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                placeholder="BTCUSDT"
+              />
+            </div>
+
+            <div>
+              <label>Tempo Gráfico</label>
+              <select value={tf} onChange={(e) => setTf(e.target.value)}>
+                {TF_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label>De</label>
+              <input
+                type="datetime-local"
+                value={dayjs(from).format("YYYY-MM-DDTHH:mm")}
+                onChange={(e) => setFrom(new Date(e.target.value))}
+              />
+            </div>
+
+            <div>
+              <label>Até</label>
+              <input
+                type="datetime-local"
+                value={dayjs(to).format("YYYY-MM-DDTHH:mm")}
+                onChange={(e) => setTo(new Date(e.target.value))}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Valores copiados da corretora */}
+        <section className="card">
+          <h3 className="card-title">Valores (copie da corretora/TradingView)</h3>
+          <form onSubmit={handleCalcular}>
+            <div className="grid-3">
+              <div>
+                <label>Preço Atual</label>
+                <input
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="ex.: 112863"
+                />
+              </div>
+
+              <div>
+                <label>ATR (valor absoluto)</label>
+                <input
+                  value={atrAbs}
+                  onChange={(e) => setAtrAbs(e.target.value)}
+                  placeholder="ex.: 89.74"
+                />
+              </div>
+
+              <div>
+                <label>VWAP</label>
+                <input
+                  value={vwap}
+                  onChange={(e) => setVwap(e.target.value)}
+                  placeholder="ex.: 112900"
+                />
+              </div>
+
+              <div>
+                <label>RSI K</label>
+                <input
+                  value={rsiK}
+                  onChange={(e) => setRsiK(e.target.value)}
+                  placeholder="ex.: 34.96"
+                />
+              </div>
+
+              <div>
+                <label>RSI D</label>
+                <input
+                  value={rsiD}
+                  onChange={(e) => setRsiD(e.target.value)}
+                  placeholder="ex.: 51.54"
+                />
+              </div>
+
+              <div>
+                <label>Volume médio</label>
+                <input
+                  value={volAvg}
+                  onChange={(e) => setVolAvg(e.target.value)}
+                  placeholder="ex.: 9.71"
+                />
+              </div>
+
+              <div>
+                <label>EMA20</label>
+                <input
+                  value={ema20}
+                  onChange={(e) => setEma20(e.target.value)}
+                  placeholder="ex.: 112927"
+                />
+              </div>
+
+              <div>
+                <label>EMA200</label>
+                <input
+                  value={ema200}
+                  onChange={(e) => setEma200(e.target.value)}
+                  placeholder="ex.: 112809"
+                />
+              </div>
+
+              <div className="statusBox">
+                <span className={`badge ${statusBadge(status)}`}>{status}</span>
+              </div>
+            </div>
+
+            <div className="row-actions">
+              <button type="submit" className="btn primary">Calcular</button>
+              <button type="button" className="btn" onClick={handleProximo}>Próximo</button>
+            </div>
+          </form>
+        </section>
+
+        {/* HL usadas (opcional) — puxadas do MSR pelo TF+período */}
+        <section className="card">
+          <h3 className="card-title">HL usadas (opcional)</h3>
+          {hlList?.length === 0 ? (
+            <p className="muted">Sem HL para os filtros atuais.</p>
+          ) : (
+            <div className="table">
+              <div className="thead">
+                <div>Preço</div>
+                <div>TF</div>
+                <div>Tipo</div>
+                <div>Data</div>
+              </div>
+              {hlList.map((h) => (
+                <div className="trow" key={h.id}>
+                  <div>{Number(h.price).toLocaleString()}</div>
+                  <div><span className="pill">{h.tf}</span></div>
+                  <div><span className={`pill ${typePill(h.type)}`}>{h.type || "undefined"}</span></div>
+                  <div>{dayjs(h.created_at).format("DD/MM/YYYY, HH:mm:ss")}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
+      <style jsx>{`
+        .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+        .title { font-size: 22px; margin: 8px 0 18px; }
+        .card { background:#0e1623; border:1px solid #1e2a3d; border-radius:12px; padding:16px; margin-bottom:16px; }
+        .card-title { margin:0 0 12px; font-size:16px; opacity:.9; }
+        label { display:block; margin-bottom:6px; font-size:13px; opacity:.8;}
+        input, select { width:100%; background:#0b1320; border:1px solid #243048; color:#cfe0ff; border-radius:10px; padding:10px 12px; height:40px; }
+        .grid-4 { display:grid; gap:12px; grid-template-columns: repeat(4, 1fr); }
+        .grid-3 { display:grid; gap:12px; grid-template-columns: repeat(3, 1fr); }
+        .row-actions { display:flex; gap:10px; margin-top:12px; }
+        .btn { background:#18243a; border:1px solid #2b3b57; color:#d9e6ff; border-radius:10px; padding:10px 16px; height:40px; }
+        .btn.primary { background:#1a4fff; border-color:#1a4fff; color:#fff; }
+        .statusBox { display:flex; align-items:flex-end; }
+        .badge { padding:6px 10px; border-radius:999px; font-size:12px; }
+        .ok { background:#0f5132; color:#d1f7e3; }
+        .warn { background:#4d2f00; color:#ffd8a8; }
+        .bad { background:#5c1a1a; color:#ffd6d6; }
+        .muted { opacity:.8; }
+        .table { display:flex; flex-direction:column; gap:6px; }
+        .thead, .trow { display:grid; grid-template-columns: 1.2fr .4fr .7fr 1fr; gap:8px; padding:8px 10px; }
+        .thead { opacity:.7; }
+        .trow { background:#0b1320; border:1px solid #1f2c44; border-radius:10px; }
+        .pill { padding:4px 8px; border-radius:999px; background:#142038; font-size:12px; }
+        .pill.green { background:#103a22; color:#bdf0d2; }
+        .pill.yellow { background:#3a320f; color:#ffe8a1; }
+        .pill.red { background:#3a1010; color:#ffc9c9; }
+        @media (max-width: 920px) {
+          .grid-4 { grid-template-columns: 1fr 1fr; }
+          .grid-3 { grid-template-columns: 1fr 1fr; }
+          .thead, .trow { grid-template-columns: 1fr .4fr .7fr 1fr; }
+        }
+        @media (max-width: 560px) {
+          .grid-4, .grid-3 { grid-template-columns: 1fr; }
+        }
+      `}</style>
     </Protected>
   );
 }
 
-const TF_OPTIONS = ['1m','5m','15m','1h','4h','1d'];
-
-function MEContent(){
-  const router = useRouter();
-  const supabase = getSupabase();
-
-  // filtros básicos
-  const [symbol, setSymbol] = useState('WIN');
-  const [timeframe, setTimeframe] = useState('5m');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-
-  // valores do mercado
-  const [priceNow, setPriceNow] = useState('');
-  const [atrPct, setAtrPct] = useState('');
-  const [rsiK, setRsiK] = useState('');
-  const [rsiD, setRsiD] = useState('');
-  const [ema20, setEma20] = useState('');
-  const [ema200, setEma200] = useState('');
-  const [volAvg, setVolAvg] = useState('');
-  const [vwap, setVwap] = useState('');          // <-- NOVO
-
-  // HL visíveis (use as linhas que você já exibe no ME; pode colar aqui)
-  const [hlRows, setHlRows] = useState([]); // [{id?, price, timeframe, type:'support'|'resistance'|'undefined', at?}, ...]
-
-  // resultado do "Calcular" (sinal simples para iniciante)
-  const [signal, setSignal] = useState(null); // 'favoravel' | 'desfavoravel' | 'neutro'
-
-  useEffect(() => {
-    // se você já tem as HL em outro estado/consulta no ME, jogue aqui:
-    // setHlRows(existingHlArray)
-  }, []);
-
-  function num(x){ const n = Number(x); return Number.isFinite(n) ? n : null; }
-
-  function calcular(){
-    // regra ultra simples para iniciante: cruzamento RSI + posição vs EMA20
-    const k = num(rsiK), d = num(rsiD), px = num(priceNow), e20 = num(ema20), e200 = num(ema200);
-    if (k==null || d==null || px==null || e20==null || e200==null) {
-      setSignal('neutro');
-      return;
-    }
-
-    const acima20 = px >= e20;
-    const acima200 = px >= e200;
-    const cruzouCima = k > d;
-    const cruzouBaixo = k < d;
-
-    if (acima20 && cruzouCima) return setSignal('favoravel');
-    if (!acima200 && cruzouBaixo) return setSignal('desfavoravel');
-    setSignal('neutro');
-  }
-
-  async function proximo(){
-    // grava snapshot em mex_runs e redireciona para /mex?id=...
-    const payload = {
-      symbol,
-      timeframe,
-      date_from: dateFrom ? new Date(dateFrom).toISOString() : null,
-      date_to:   dateTo   ? new Date(dateTo).toISOString()   : null,
-      price_now: num(priceNow),
-      atr_pct:   num(atrPct),
-      rsi_k:     num(rsiK),
-      rsi_d:     num(rsiD),
-      ema20:     num(ema20),
-      ema200:    num(ema200),
-      vol_avg:   num(volAvg),
-      vwap:      num(vwap),        // <-- NOVO (vai para o MEX)
-      mex_signal: signal,
-      hl_rows:   hlRows && Array.isArray(hlRows) ? hlRows : []
-    };
-
-    const { data, error } = await supabase
-      .from('mex_runs')
-      .insert(payload)
-      .select('id')
-      .single();
-
-    if (error) {
-      alert('Erro ao salvar: ' + (error.message || error));
-      return;
-    }
-    router.push(`/mex?id=${data.id}`);
-  }
-
-  // UI – layout compacto e alinhado
-  return (
-    <main className="container">
-      <div className="pane" style={{ marginBottom: 12 }}>
-        <h2>ME — Módulo de Estudo</h2>
-
-        {/* filtros de data iguais ao MSR */}
-        <div className="grid-3" style={{ marginTop: 12 }}>
-          <div>
-            <label>Símbolo</label>
-            <input value={symbol} onChange={e=>setSymbol(e.target.value)} placeholder="WIN / BTCUSDT..." />
-          </div>
-          <div>
-            <label>Tempo Gráfico</label>
-            <select value={timeframe} onChange={e=>setTimeframe(e.target.value)}>
-              {TF_OPTIONS.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-            </select>
-          </div>
-          <div />
-        </div>
-
-        <div className="grid-3" style={{ marginTop: 8 }}>
-          <div>
-            <label>De</label>
-            <input type="datetime-local" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
-          </div>
-          <div>
-            <label>Até</label>
-            <input type="datetime-local" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
-          </div>
-          <div />
-        </div>
-      </div>
-
-      <div className="pane" style={{ marginBottom: 12 }}>
-        <h3>Valores (copie da corretora/TradingView)</h3>
-        <div className="grid-3" style={{ marginTop: 8 }}>
-          <div><label>Preço Atual</label><input inputMode="decimal" value={priceNow} onChange={e=>setPriceNow(e.target.value)} /></div>
-          <div><label>ATR %</label><input inputMode="decimal" value={atrPct} onChange={e=>setAtrPct(e.target.value)} placeholder="ex.: 0.80 para 0,80%" /></div>
-          <div><label>VWAP</label><input inputMode="decimal" value={vwap} onChange={e=>setVwap(e.target.value)} /></div>
-        </div>
-
-        <div className="grid-3" style={{ marginTop: 8 }}>
-          <div><label>RSI K</label><input inputMode="decimal" value={rsiK} onChange={e=>setRsiK(e.target.value)} /></div>
-          <div><label>RSI D</label><input inputMode="decimal" value={rsiD} onChange={e=>setRsiD(e.target.value)} /></div>
-          <div><label>Volume médio</label><input inputMode="decimal" value={volAvg} onChange={e=>setVolAvg(e.target.value)} /></div>
-        </div>
-
-        <div className="grid-3" style={{ marginTop: 8 }}>
-          <div><label>EMA20</label><input inputMode="decimal" value={ema20} onChange={e=>setEma20(e.target.value)} /></div>
-          <div><label>EMA200</label><input inputMode="decimal" value={ema200} onChange={e=>setEma200(e.target.value)} /></div>
-          <div />
-        </div>
-
-        <div style={{ display:'flex', gap:8, marginTop:12, flexWrap:'wrap' }}>
-          <button onClick={calcular}>Calcular</button>
-          <button onClick={proximo}>Próximo</button>
-          {signal && (
-            <span className={`badge ${
-              signal==='favoravel' ? 'good' : signal==='desfavoravel' ? 'bad' : 'warn'
-            }`}>
-              {signal==='favoravel'?'Favorável':signal==='desfavoravel'?'Desfavorável':'Neutro'}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Opcional: liste/edite suas HL aqui */}
-      <div className="pane">
-        <h3>HL usadas (opcional)</h3>
-        {(!hlRows || hlRows.length===0) ? (
-          <div style={{opacity:.7}}>Sem HL. Você pode manter vazio ou preencher na lógica atual do seu ME.</div>
-        ) : (
-          <table className="table">
-            <thead><tr><th>Preço</th><th>TF</th><th>Tipo</th><th>Data</th></tr></thead>
-            <tbody>
-              {hlRows.map((r,i)=>(
-                <tr key={r.id ?? i}>
-                  <td>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                  <td>{r.timeframe}</td>
-                  <td>{r.type}</td>
-                  <td>{r.at ? new Date(r.at).toLocaleString('pt-BR') : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </main>
-  );
+function statusBadge(s) {
+  if (s === "Favorável") return "ok";
+  if (s === "Desfavorável") return "bad";
+  return "warn";
 }
 
+function typePill(t) {
+  if (t === "support") return "green";
+  if (t === "resistance") return "red";
+  return "yellow";
+}
