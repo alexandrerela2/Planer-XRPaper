@@ -20,10 +20,10 @@ function MEContent(){
   const [session, setSession] = useState(null);
 
   // filtros / formulário
-  const [symbol, setSymbol] = useState('BTCUSDT');
-  const [tf, setTf] = useState('5m');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [symbol, setSymbol] = useState(router.query.symbol ? String(router.query.symbol).toUpperCase() : 'BTCUSDT');
+  const [tf, setTf] = useState(router.query.tf ? String(router.query.tf) : '5m');
+  const [dateFrom, setDateFrom] = useState(router.query.dateFrom ? String(router.query.dateFrom) : '');
+  const [dateTo, setDateTo] = useState(router.query.dateTo ? String(router.query.dateTo) : '');
 
   const [priceNow, setPriceNow] = useState('');
   const [ema20, setEma20] = useState('');
@@ -75,7 +75,7 @@ function MEContent(){
     setRowsHL(data || []);
   }
 
-  // === Calcular sinal (mantém função do antigo "Salvar Valores")
+  // === "Calcular": mantém função (gera sinal, não grava)
   function calcular(){
     const px = numOrNull(priceNow);
     const atrNum = numOrNull(atr);
@@ -125,7 +125,7 @@ function MEContent(){
       kind:'overlay',
       id: `ov-${idx}`,
       price: o.price,
-      timeframe: tf,   // mostra o TF atual
+      timeframe: tf,
       type: 'undefined',
       label: o.label,
       at: null
@@ -134,7 +134,7 @@ function MEContent(){
     return all;
   }, [rowsHL, overlays, tf]);
 
-  // === Próximo: salvar snapshot e abrir MEX
+  // === "Próximo": salva snapshot e abre MEX
   async function proximo(){
     const supabase = getSupabase();
     const user_id = session.user.id;
@@ -153,7 +153,7 @@ function MEContent(){
     else if (signal.cls === 'bad') mex_signal = 'desfavoravel';
     else if (signal.cls === 'warn') mex_signal = 'neutro';
 
-    // pega somente as HL reais que estão visíveis (já filtradas por TF/período)
+    // HL reais visíveis (já filtradas por TF/período)
     const hlReal = (rowsHL || []).map(r => ({
       id: r.id, price: r.price, timeframe: r.timeframe, type: r.type, at: r.at
     }));
@@ -183,7 +183,7 @@ function MEContent(){
       <div className="pane" style={{marginBottom:12}}>
         <h2>ME — Estratégias</h2>
 
-        {/* Linha 1: símbolo, TF, Valor Atual */}
+        {/* grid */}
         <div className="form-grid" style={{marginTop:10}}>
           <div>
             <label> Símbolo </label>
@@ -200,7 +200,6 @@ function MEContent(){
             <input value={priceNow} onChange={e=>setPriceNow(e.target.value)} />
           </div>
 
-          {/* Linha 2: EMA20, EMA200, ATR */}
           <div>
             <label> EMA20 </label>
             <input value={ema20} onChange={e=>setEma20(e.target.value)} />
@@ -214,7 +213,6 @@ function MEContent(){
             <input value={atr} onChange={e=>setAtr(e.target.value)} />
           </div>
 
-          {/* Linha 3: Volume, RSI K, RSI D */}
           <div>
             <label> Volume médio </label>
             <input value={volAvg} onChange={e=>setVolAvg(e.target.value)} />
@@ -228,7 +226,6 @@ function MEContent(){
             <input value={rsiD} onChange={e=>setRsiD(e.target.value)} />
           </div>
 
-          {/* Linha 4: Filtro de datas (como no MSR) */}
           <div>
             <label> De </label>
             <input type="datetime-local" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
@@ -263,7 +260,7 @@ function MEContent(){
               <th className="center">Data</th>
             </tr>
           </thead>
-          <tbody>
+        <tbody>
             {mergedRows.map(r => {
               const isOverlay = r.kind === 'overlay';
               const cls = (r.type === 'support') ? 'support'
