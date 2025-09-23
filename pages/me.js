@@ -24,57 +24,58 @@ function MEContent(){
   const [priceNow, setPriceNow] = useState('');
   const [ema20, setEma20] = useState('');
   const [ema200, setEma200] = useState('');
+  const [atr, setAtr] = useState('');          // NOVO CAMPO
   const [volAvg, setVolAvg] = useState('');
   const [rsiK, setRsiK] = useState('');
   const [rsiD, setRsiD] = useState('');
 
-  const [rowsHL, setRowsHL] = useState([]);   // HL do banco (todas os TFs)
+  const [rowsHL, setRowsHL] = useState([]);   // HL filtradas por TF
   const [saved, setSaved] = useState(null);
 
   useEffect(() => { getSupabase().auth.getSession().then(({data})=>setSession(data.session)); }, []);
-  useEffect(() => { if (session) fetchHL(); }, [session, symbol]);
+  useEffect(() => { if (session) fetchHL(); }, [session, symbol, tf]);
 
   async function fetchHL(){
-    // pega TODAS as HL do símbolo para poder intercalar com os overlays
+    // HL do símbolo RESPEITANDO o TF selecionado
     const { data } = await getSupabase()
       .from('hl_lines')
       .select('*')
-      .eq('symbol', symbol);
+      .eq('symbol', symbol)
+      .eq('timeframe', tf)
+      .order('price', { ascending: false });
     setRowsHL(data || []);
   }
 
   function numOrNull(v){
     if (v === '' || v === null || v === undefined) return null;
-    const s = String(v).trim().replace(/\s+/g,'').replace(/%/g,'');
-    // aceita vírgula brasileira
-    const hasDot = s.includes('.'), hasComma = s.includes(',');
-    let t = s;
+    const s0 = String(v).trim().replace(/\s+/g,'').replace(/%/g,'');
+    const hasDot = s0.includes('.'), hasComma = s0.includes(',');
+    let s = s0;
     if(hasDot && hasComma){
-      const lastDot = s.lastIndexOf('.'); const lastComma = s.lastIndexOf(',');
-      t = (lastComma > lastDot) ? s.replace(/\./g,'').replace(/,/g,'.') : s.replace(/,/g,'');
-    }else if(hasComma){ t = s.replace(/\./g,'').replace(/,/g,'.'); }
-    const n = Number(t);
+      const d = s.lastIndexOf('.'), c = s.lastIndexOf(',');
+      s = (c>d) ? s.replace(/\./g,'').replace(/,/g,'.') : s.replace(/,/g,'');
+    }else if(hasComma){ s = s.replace(/\./g,'').replace(/,/g,'.'); }
+    const n = Number(s);
     return Number.isFinite(n) ? n : null;
   }
 
   async function save(){
     const user_id = session.user.id;
     const payload = {
-      user_id,
-      symbol,
-      timeframe: tf,
+      user_id, symbol, timeframe: tf,
       price_now: numOrNull(priceNow),
       ema20: numOrNull(ema20),
       ema200: numOrNull(ema200),
       vol_avg: numOrNull(volAvg),
       rsi_k: numOrNull(rsiK),
-      rsi_d: numOrNull(rsiD)
+      rsi_d: numOrNull(rsiD),
+      atr: numOrNull(atr)           // opcional salvar, se quiser acompanhar depois
     };
     const { data, error } = await getSupabase().from('strategies').insert(payload).select('*').single();
     if (!error) setSaved(data);
   }
 
-  // === OVERLAYS (linhas sintéticas) ===
+  // === OVERLAYS (linhas sintéticas) — intercaladas por preço dentro do TF selecionado ===
   const overlays = useMemo(() => {
     const arr = [];
     const pn = numOrNull(priceNow);
@@ -86,35 +87,54 @@ function MEContent(){
     return arr;
   }, [priceNow, ema20, ema200]);
 
-  // === MERGE (HL + overlays) e ordenação por preço desc ===
   const mergedRows = useMemo(() => {
-    const normalizedHL = (rowsHL || []).map(r => ({
+    const normHL = (rowsHL || []).map(r => ({
       kind: 'hl',
       id: r.id,
       price: Number(r.price),
       timeframe: r.timeframe,
-      type: r.type,           // 'support' | 'resistance' | 'undefined'
+      type: r.type,
       at: r.at
     }));
     const normOver = overlays.map((o, idx) => ({
       kind:'overlay',
       id: `ov-${idx}`,
       price: o.price,
-      timeframe: null,        // overlay não tem TF específico
-      type: 'undefined',      // cor "amarelo" por padrão (podemos mapear diferente depois)
+      timeframe: tf,   // mostra o TF atual
+      type: 'undefined',
       label: o.label,
       at: null
     }));
-    const all = [...normalizedHL, ...normOver];
-    // ordena por preço (desc)
-    all.sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+    const all = [...normHL, ...normOver].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
     return all;
-  }, [rowsHL, overlays]);
+  }, [rowsHL, overlays, tf]);
 
-  // === Render ===
+  // === Resultado/Sinal com ATR + Volume + RSI (no card superior) ===
+  const signal = useMemo(() => {
+    const px = numOrNull(priceNow);
+    const atrNum = numOrNull(atr);
+    const k = numOrNull(rsiK), d = numOrNull(rsiD);
+    const vol = numOrNull(volAvg);
+
+    if (px === null || atrNum === null) return { tag: '—', cls: '' , detail: 'Preencha Valor Atual e ATR' };
+
+    const atrPct = (atrNum/px)*100; // ATR como % do preço
+    let cls = 'warn', tag = 'Neutro', reason = [];
+
+    // Heurística simples, ajustável depois:
+    if (atrPct >= 1 && k !== null && d !== null && k > d && k >= 50 && k <= 80) { cls = 'good'; tag = 'Favorável'; }
+    else if (atrPct < 0.5 || (k !== null && d !== null && k < d)) { cls = 'bad'; tag = 'Desfavorável'; }
+
+    if (vol !== null) reason.push(`Vol≈${vol}`);
+    if (k !== null && d !== null) reason.push(`RSI ${k}/${d}`);
+    reason.push(`ATR% ${atrPct.toFixed(2).replace('.',',')}%`);
+
+    return { tag, cls, detail: reason.join(' · ') };
+  }, [priceNow, atr, rsiK, rsiD, volAvg]);
+
   return (
     <main className="container">
-      {/* FORM: grid agradável, alinhado e responsivo */}
+      {/* FORM: grid agradável e responsivo (tema da calculadora) */}
       <div className="pane" style={{marginBottom:12}}>
         <h2>ME — Estratégias</h2>
         <div className="form-grid" style={{marginTop:10}}>
@@ -142,10 +162,14 @@ function MEContent(){
             <input value={ema200} onChange={e=>setEma200(e.target.value)} />
           </div>
           <div>
+            <label> ATR </label>
+            <input value={atr} onChange={e=>setAtr(e.target.value)} />
+          </div>
+
+          <div>
             <label> Volume médio </label>
             <input value={volAvg} onChange={e=>setVolAvg(e.target.value)} />
           </div>
-
           <div>
             <label> RSI K </label>
             <input value={rsiK} onChange={e=>setRsiK(e.target.value)} />
@@ -154,9 +178,16 @@ function MEContent(){
             <label> RSI D </label>
             <input value={rsiD} onChange={e=>setRsiD(e.target.value)} />
           </div>
+
           <div className="form-actions">
             <button onClick={save}>Salvar Valores</button>
           </div>
+        </div>
+
+        {/* Sinal (badge) baseado em ATR + Volume + RSI */}
+        <div style={{marginTop:10}}>
+          <span className={`badge ${signal.cls || ''}`} style={{marginRight:8}}>{signal.tag}</span>
+          <span style={{color:'var(--muted)'}}>{signal.detail}</span>
         </div>
       </div>
 
@@ -168,7 +199,7 @@ function MEContent(){
         </div>
       )}
 
-      {/* LISTA: HL de qualquer TF + overlays intercalados por preço desc */}
+      {/* LISTA: HL apenas do TF selecionado + overlays intercalados por preço */}
       <div className="pane">
         <table className="table">
           <thead>
@@ -181,44 +212,25 @@ function MEContent(){
           </thead>
           <tbody>
             {mergedRows.map(r => {
-              // define classe de cor p/ pills/badges
-              const cls = (r.type === 'support') ? 'support' :
-                          (r.type === 'resistance') ? 'resistance' : 'undefined';
-
-              const priceText = Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2});
               const isOverlay = r.kind === 'overlay';
-
+              const cls = (r.type === 'support') ? 'support'
+                        : (r.type === 'resistance') ? 'resistance'
+                        : 'undefined';
               return (
                 <tr key={r.id}>
-                  {/* PREÇO com pastilha colorida */}
-                  <td>
-                    <span className={`pill ${cls}`}>{priceText}</span>
-                  </td>
-
-                  {/* TF: badge azul p/ HL, “—” p/ overlay */}
-                  <td className="center">
-                    {isOverlay
-                      ? <span className="badge tf">—</span>
-                      : <span className="badge tf">{r.timeframe}</span>}
-                  </td>
-
-                  {/* Tipo: HL mostra o tipo; overlay mostra a descrição ([Valor Atual]/[EMA20]/[EMA200]) */}
+                  <td><span className={`pill ${cls}`}>{Number(r.price).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2})}</span></td>
+                  <td className="center"><span className="badge tf">{r.timeframe || '—'}</span></td>
                   <td className="center">
                     {isOverlay
                       ? <span className={`badge ${cls}`}>{r.label}</span>
                       : <span className={`badge ${cls}`}>{r.type}</span>}
                   </td>
-
-                  {/* Data: vazia para overlay */}
-                  <td className="center">
-                    {isOverlay || !r.at ? '—' : new Date(r.at).toLocaleString('pt-BR')}
-                  </td>
+                  <td className="center">{isOverlay || !r.at ? '—' : new Date(r.at).toLocaleString('pt-BR')}</td>
                 </tr>
               );
             })}
-
             {mergedRows.length === 0 && (
-              <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Sem dados. Preencha os campos ou cadastre HL no MSR.</td></tr>
+              <tr><td colSpan={4} style={{opacity:.7,padding:'12px 8px'}}>Sem HL para este timeframe.</td></tr>
             )}
           </tbody>
         </table>
