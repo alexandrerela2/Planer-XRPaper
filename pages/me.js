@@ -7,7 +7,7 @@ import { getSupabase } from "@/lib/supabaseClient";
 
 const TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
-// Helpers de data (sem libs externas)
+// ---------- Helpers de data (sem libs externas)
 function toIso(v) {
   if (!v) return null;
   const d = v instanceof Date ? v : new Date(v);
@@ -31,22 +31,7 @@ function fromLocalInputValue(str) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// Normaliza TF para possíveis formatos salvos no MSR
-function tfVariants(tf) {
-  // "5m" -> ["5m","5","05","300s"]
-  if (!tf) return [];
-  const m = tf.endsWith("m") ? parseInt(tf) : tf === "1h" ? 60 : tf === "4h" ? 240 : null;
-  const variants = [];
-  if (tf) variants.push(tf);                 // "5m"
-  if (m != null) {
-    variants.push(String(m));                // "5"
-    variants.push(String(m).padStart(2,"0"));// "05"
-    variants.push(String(m*60)+"s");         // "300s"
-  }
-  return [...new Set(variants)];
-}
-
-// Pega o timestamp de um registro, aceitando múltiplas colunas
+// ---------- Helpers diversos
 function getRowDate(row) {
   const candidates = [row?.created_at, row?.at, row?.ts, row?.timestamp, row?.time, row?.date];
   for (const c of candidates) {
@@ -56,17 +41,25 @@ function getRowDate(row) {
   }
   return null;
 }
-
-// Pega o tipo de linha aceitando "type" ou "kind"
 function getRowType(row) {
   return row?.type ?? row?.kind ?? "undefined";
+}
+function statusBadge(s) {
+  if (s === "Favorável") return "ok";
+  if (s === "Desfavorável") return "bad";
+  return "warn";
+}
+function typePill(t) {
+  if (t === "support") return "green";
+  if (t === "resistance") return "red";
+  return "yellow";
 }
 
 export default function ME() {
   const router = useRouter();
   const supabase = getSupabase();
 
-  // filtros
+  // -------- Filtros/topo
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [tf, setTf] = useState("5m");
   const [from, setFrom] = useState(() => {
@@ -76,9 +69,9 @@ export default function ME() {
   });
   const [to, setTo] = useState(() => new Date());
 
-  // valores (copiados da corretora)
-  const [price, setPrice] = useState("");
-  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto
+  // -------- Valores (copiados da corretora)
+  const [price, setPrice] = useState("");   // preço atual
+  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto (NÃO %)
   const [rsiK, setRsiK] = useState("");
   const [rsiD, setRsiD] = useState("");
   const [ema20, setEma20] = useState("");
@@ -86,44 +79,33 @@ export default function ME() {
   const [vwap, setVwap] = useState("");
   const [volAvg, setVolAvg] = useState("");
 
-  // HL vindas do MSR
+  // -------- HL vindas do MSR (para o período/TF selecionados)
   const [hlList, setHlList] = useState([]);
 
-  // status simples (didático)
+  // -------- Feedback didático
   const [status, setStatus] = useState("Neutro");
 
-  // carregar HLs ao mudar symbol/tf/período
+  // Carrega HLs (com fallback p/ view compat) ao mudar symbol/timeframe/período
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       if (!symbol || !tf || !from || !to) return;
 
-      try {
-        const tfAlts = tfVariants(tf); // aceita 5m, 5, 05, 300s...
-        // Monta string do .or() para timeframe
-        // Ex.: "timeframe.eq.5m,timeframe.eq.5,timeframe.eq.05,timeframe.eq.300s"
-        const orTf = tfAlts.map((t) => `timeframe.eq.${t}`).join(",");
-
-        // Busca por símbolo e qualquer um dos TFs aceitos
-        // (Não filtramos por data aqui porque as colunas podem variar;
-        //  vamos filtrar por data do lado do cliente com getRowDate().)
-        const query = supabase
-          .from("hl_lines")
-          .select("id, price, timeframe, type, kind, created_at, at, ts, timestamp, time, date")
-          .eq("symbol", symbol);
-
-        if (orTf) query.or(orTf);
-
-        query.order("price", { ascending: false });
-
-        const { data, error } = await query;
+      async function querySource(fromName) {
+        const { data, error } = await supabase
+          .from(fromName)
+          .select("id, price, timeframe, type, created_at, at, ts, timestamp, time, date")
+          .eq("symbol", symbol)
+          .eq("timeframe", tf)
+          .order("price", { ascending: false });
 
         if (error) throw error;
 
-        // Filtro de período no cliente aceitando múltiplas colunas de data
-        const fromMs = +from;
-        const toMs = +to;
+        // filtra por período no cliente (aceitando várias colunas de data)
+        const fromMs = +new Date(from);
+        const toMs = +new Date(to);
+
         const filtered = (data || []).filter((row) => {
           const d = getRowDate(row);
           if (!d) return false;
@@ -131,17 +113,31 @@ export default function ME() {
           return t >= fromMs && t <= toMs;
         });
 
-        if (!cancelled) setHlList(filtered);
+        return filtered;
+      }
+
+      try {
+        // 1) tenta tabela principal
+        let rows = await querySource("hl_lines");
+
+        // 2) fallback: se vier vazio, tenta view compat
+        if (!rows || rows.length === 0) {
+          rows = await querySource("hl_lines_compat_tf");
+        }
+
+        if (!cancelled) setHlList(rows || []);
       } catch (err) {
         console.error("Erro ao carregar HLs:", err.message || err);
         if (!cancelled) setHlList([]);
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [symbol, tf, from, to, supabase]);
 
-  // “humor” didático
+  // “humor” didático simples
   const mood = useMemo(() => {
     const p = Number(price);
     const e20 = Number(ema20);
@@ -172,6 +168,7 @@ export default function ME() {
         timeframe: tf,
         date_from: toIso(from),
         date_to: toIso(to),
+
         price_now: Number(price) || null,
         atr_abs: Number(atrAbs) || null,
         rsi_k: Number(rsiK) || null,
@@ -180,10 +177,13 @@ export default function ME() {
         ema200: Number(ema200) || null,
         vwap: Number(vwap) || null,
         vol_avg: Number(volAvg) || null,
+
         mex_signal: status,
+
+        // snapshot das HL usadas
         hl_rows: (hlList || []).map((h) => ({
-          price: h.price,
-          timeframe: h.timeframe,                        // <- usa timeframe
+          price: Number(h.price),
+          timeframe: h.timeframe,
           type: getRowType(h),
           at: (getRowDate(h) || new Date()).toISOString(),
         })),
@@ -194,6 +194,7 @@ export default function ME() {
         .insert(payload)
         .select("id")
         .single();
+
       if (error) throw error;
 
       router.push(`/mex?id=${data.id}`);
@@ -401,15 +402,4 @@ export default function ME() {
       `}</style>
     </Protected>
   );
-}
-
-function statusBadge(s) {
-  if (s === "Favorável") return "ok";
-  if (s === "Desfavorável") return "bad";
-  return "warn";
-}
-function typePill(t) {
-  if (t === "support") return "green";
-  if (t === "resistance") return "red";
-  return "yellow";
 }
