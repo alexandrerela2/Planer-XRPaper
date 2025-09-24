@@ -5,73 +5,61 @@ import Protected from "@/components/Protected";
 import Header from "@/components/Header";
 import { getSupabase } from "@/lib/supabaseClient";
 
+// Opções padrão de TF (as mesmas que você usa no MSR)
 const TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
-// ---------- Helpers de data (sem libs externas)
-function toIso(v) {
+/** Converte string do <input type="datetime-local"> para ISO (UTC) ou null */
+function toIsoOrNull(v) {
   if (!v) return null;
-  const d = v instanceof Date ? v : new Date(v);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString();
+  const d = new Date(v);
+  return isNaN(+d) ? null : d.toISOString();
 }
+
+/** Converte Date (ou string ISO) em valor aceito pelo input datetime-local */
 function toLocalInputValue(v) {
   const d = v instanceof Date ? v : new Date(v);
-  if (isNaN(d.getTime())) return "";
+  if (isNaN(+d)) return "";
   const pad = (n) => String(n).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const mm = pad(d.getMonth() + 1);
-  const dd = pad(d.getDate());
-  const hh = pad(d.getHours());
-  const mi = pad(d.getMinutes());
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
 }
+
+/** Converte valor do input datetime-local para Date (ou null) */
 function fromLocalInputValue(str) {
   if (!str) return null;
   const d = new Date(str);
-  return isNaN(d.getTime()) ? null : d;
+  return isNaN(+d) ? null : d;
 }
 
-// ---------- Helpers diversos
-function getRowDate(row) {
-  const candidates = [row?.created_at, row?.at, row?.ts, row?.timestamp, row?.time, row?.date];
-  for (const c of candidates) {
-    if (!c) continue;
-    const d = new Date(c);
-    if (!isNaN(d.getTime())) return d;
-  }
-  return null;
+function pillClassByType(t) {
+  if (t === "support") return "pill green";
+  if (t === "resistance") return "pill red";
+  return "pill yellow";
 }
-function getRowType(row) {
-  return row?.type ?? row?.kind ?? "undefined";
-}
-function statusBadge(s) {
-  if (s === "Favorável") return "ok";
-  if (s === "Desfavorável") return "bad";
-  return "warn";
-}
-function typePill(t) {
-  if (t === "support") return "green";
-  if (t === "resistance") return "red";
-  return "yellow";
+function badgeByMood(m) {
+  if (m === "Favorável") return "badge ok";
+  if (m === "Desfavorável") return "badge bad";
+  return "badge warn";
 }
 
 export default function ME() {
   const router = useRouter();
   const supabase = getSupabase();
 
-  // -------- Filtros/topo
+  // Filtros
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [tf, setTf] = useState("5m");
-  const [from, setFrom] = useState(() => {
+  const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
   });
-  const [to, setTo] = useState(() => new Date());
+  const [dateTo, setDateTo] = useState(() => new Date());
 
-  // -------- Valores (copiados da corretora)
-  const [price, setPrice] = useState("");   // preço atual
-  const [atrAbs, setAtrAbs] = useState(""); // ATR absoluto (NÃO %)
+  // Valores (copiados da corretora/TradingView)
+  const [price, setPrice] = useState("");
+  const [atrAbs, setAtrAbs] = useState(""); // ATR (valor absoluto)
   const [rsiK, setRsiK] = useState("");
   const [rsiD, setRsiD] = useState("");
   const [ema20, setEma20] = useState("");
@@ -79,86 +67,71 @@ export default function ME() {
   const [vwap, setVwap] = useState("");
   const [volAvg, setVolAvg] = useState("");
 
-  // -------- HL vindas do MSR (para o período/TF selecionados)
+  // HLs
   const [hlList, setHlList] = useState([]);
+  const [loadingHL, setLoadingHL] = useState(false);
 
-  // -------- Feedback didático
-  const [status, setStatus] = useState("Neutro");
-
-  // Carrega HLs (com fallback p/ view compat) ao mudar symbol/timeframe/período
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      if (!symbol || !tf || !from || !to) return;
-
-      async function querySource(fromName) {
-        const { data, error } = await supabase
-          .from(fromName)
-          .select("id, price, timeframe, type, created_at, at, ts, timestamp, time, date")
-          .eq("symbol", symbol)
-          .eq("timeframe", tf)
-          .order("price", { ascending: false });
-
-        if (error) throw error;
-
-        // filtra por período no cliente (aceitando várias colunas de data)
-        const fromMs = +new Date(from);
-        const toMs = +new Date(to);
-
-        const filtered = (data || []).filter((row) => {
-          const d = getRowDate(row);
-          if (!d) return false;
-          const t = +d;
-          return t >= fromMs && t <= toMs;
-        });
-
-        return filtered;
-      }
-
-      try {
-        // 1) tenta tabela principal
-        let rows = await querySource("hl_lines");
-
-        // 2) fallback: se vier vazio, tenta view compat
-        if (!rows || rows.length === 0) {
-          rows = await querySource("hl_lines_compat_tf");
-        }
-
-        if (!cancelled) setHlList(rows || []);
-      } catch (err) {
-        console.error("Erro ao carregar HLs:", err.message || err);
-        if (!cancelled) setHlList([]);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [symbol, tf, from, to, supabase]);
-
-  // “humor” didático simples
+  // Status didático do ME
   const mood = useMemo(() => {
     const p = Number(price);
     const e20 = Number(ema20);
     const e200 = Number(ema200);
     const k = Number(rsiK);
     const d = Number(rsiD);
-
     let score = 0;
     if (Number.isFinite(p) && Number.isFinite(e20) && p > e20) score += 1;
     if (Number.isFinite(p) && Number.isFinite(e200) && p > e200) score += 1;
     if (Number.isFinite(k) && Number.isFinite(d) && k > d) score += 1;
     if (Number(atrAbs) > 0) score += 1;
-
     if (score >= 3) return "Favorável";
     if (score <= 1) return "Desfavorável";
     return "Neutro";
   }, [price, ema20, ema200, rsiK, rsiD, atrAbs]);
 
+  // ====== BUSCA DE HLs — MESMA LÓGICA DO MSR ======
+  async function fetchHLs() {
+    if (!symbol || !tf) {
+      setHlList([]);
+      return;
+    }
+    setLoadingHL(true);
+
+    try {
+      let q = supabase
+        .from("hl_lines")
+        .select("id, price, type, timeframe, at")
+        .eq("symbol", symbol)
+        .eq("timeframe", tf);
+
+      const fromISO = toIsoOrNull(dateFrom);
+      const toISO = toIsoOrNull(dateTo);
+
+      if (fromISO) q = q.gte("at", fromISO);
+      if (toISO) q = q.lte("at", toISO);
+
+      // Mesmo order do MSR (por preço desc para visual)
+      q = q.order("price", { ascending: false });
+
+      const { data, error } = await q;
+      if (error) throw error;
+      setHlList(data || []);
+    } catch (err) {
+      console.error("Erro buscando HLs:", err);
+      setHlList([]);
+    } finally {
+      setLoadingHL(false);
+    }
+  }
+
+  // Recarrega HLs quando filtros mudarem (igual MSR)
+  useEffect(() => {
+    fetchHLs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, tf, dateFrom, dateTo]);
+
   function handleCalcular(e) {
     e.preventDefault();
-    setStatus(mood);
+    // Mantém apenas a etiqueta didática (já calculada em mood).
   }
 
   async function handleProximo() {
@@ -166,9 +139,8 @@ export default function ME() {
       const payload = {
         symbol,
         timeframe: tf,
-        date_from: toIso(from),
-        date_to: toIso(to),
-
+        date_from: toIsoOrNull(dateFrom),
+        date_to: toIsoOrNull(dateTo),
         price_now: Number(price) || null,
         atr_abs: Number(atrAbs) || null,
         rsi_k: Number(rsiK) || null,
@@ -177,15 +149,13 @@ export default function ME() {
         ema200: Number(ema200) || null,
         vwap: Number(vwap) || null,
         vol_avg: Number(volAvg) || null,
-
-        mex_signal: status,
-
-        // snapshot das HL usadas
+        mex_signal: mood,
+        // guarda as HLs que você usou nesse cálculo
         hl_rows: (hlList || []).map((h) => ({
           price: Number(h.price),
           timeframe: h.timeframe,
-          type: getRowType(h),
-          at: (getRowDate(h) || new Date()).toISOString(),
+          type: h.type ?? "undefined",
+          at: h.at ?? new Date().toISOString(),
         })),
       };
 
@@ -196,12 +166,18 @@ export default function ME() {
         .single();
 
       if (error) throw error;
-
       router.push(`/mex?id=${data.id}`);
     } catch (err) {
-      alert("Erro ao salvar snapshot: " + (err.message || err));
+      alert("Erro ao salvar snapshot: " + (err?.message || err));
     }
   }
+
+  const tzMins = new Date().getTimezoneOffset();
+  const tzSign = tzMins > 0 ? "-" : "+";
+  const tzAbs = Math.abs(tzMins);
+  const tzStr = `UTC${tzSign}${String(Math.floor(tzAbs / 60)).padStart(2, "0")}:${String(
+    tzAbs % 60
+  ).padStart(2, "0")}`;
 
   return (
     <Protected>
@@ -209,7 +185,7 @@ export default function ME() {
       <main className="container">
         <h1 className="title">ME — Módulo de Estudo</h1>
 
-        {/* Filtros topo */}
+        {/* Filtros principais (iguais ao MSR) */}
         <section className="card">
           <div className="grid-4">
             <div>
@@ -217,40 +193,43 @@ export default function ME() {
               <input
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                placeholder="BTCUSDT"
+                placeholder="ex.: BTCUSDT"
               />
             </div>
-
             <div>
               <label>Tempo Gráfico</label>
               <select value={tf} onChange={(e) => setTf(e.target.value)}>
-                {TF_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
+                {TF_OPTIONS.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
                 ))}
               </select>
             </div>
-
             <div>
               <label>De</label>
               <input
                 type="datetime-local"
-                value={toLocalInputValue(from)}
-                onChange={(e) => setFrom(fromLocalInputValue(e.target.value))}
+                value={toLocalInputValue(dateFrom)}
+                onChange={(e) => setDateFrom(fromLocalInputValue(e.target.value))}
               />
             </div>
-
             <div>
               <label>Até</label>
               <input
                 type="datetime-local"
-                value={toLocalInputValue(to)}
-                onChange={(e) => setTo(fromLocalInputValue(e.target.value))}
+                value={toLocalInputValue(dateTo)}
+                onChange={(e) => setDateTo(fromLocalInputValue(e.target.value))}
               />
             </div>
           </div>
+
+          <p className="hint">
+            Seu fuso: <b>{tzStr}</b>. O período enviado ao banco é convertido para UTC.
+          </p>
         </section>
 
-        {/* Valores copiados da corretora */}
+        {/* Valores copiados da corretora / TV */}
         <section className="card">
           <h3 className="card-title">Valores (copie da corretora/TradingView)</h3>
           <form onSubmit={handleCalcular}>
@@ -263,7 +242,6 @@ export default function ME() {
                   placeholder="ex.: 112863"
                 />
               </div>
-
               <div>
                 <label>ATR (valor absoluto)</label>
                 <input
@@ -272,7 +250,6 @@ export default function ME() {
                   placeholder="ex.: 89.74"
                 />
               </div>
-
               <div>
                 <label>VWAP</label>
                 <input
@@ -281,7 +258,6 @@ export default function ME() {
                   placeholder="ex.: 112900"
                 />
               </div>
-
               <div>
                 <label>RSI K</label>
                 <input
@@ -290,7 +266,6 @@ export default function ME() {
                   placeholder="ex.: 43.41"
                 />
               </div>
-
               <div>
                 <label>RSI D</label>
                 <input
@@ -299,7 +274,6 @@ export default function ME() {
                   placeholder="ex.: 47.94"
                 />
               </div>
-
               <div>
                 <label>Volume médio</label>
                 <input
@@ -308,7 +282,6 @@ export default function ME() {
                   placeholder="ex.: 8.684"
                 />
               </div>
-
               <div>
                 <label>EMA20</label>
                 <input
@@ -317,7 +290,6 @@ export default function ME() {
                   placeholder="ex.: 112043"
                 />
               </div>
-
               <div>
                 <label>EMA200</label>
                 <input
@@ -328,21 +300,28 @@ export default function ME() {
               </div>
 
               <div className="statusBox">
-                <span className={`badge ${statusBadge(status)}`}>{status}</span>
+                <span className={badgeByMood(mood)}>{mood}</span>
               </div>
             </div>
 
             <div className="row-actions">
-              <button type="submit" className="btn primary">Calcular</button>
-              <button type="button" className="btn" onClick={handleProximo}>Próximo</button>
+              <button type="submit" className="btn primary">
+                Calcular
+              </button>
+              <button type="button" className="btn" onClick={handleProximo}>
+                Próximo
+              </button>
             </div>
           </form>
         </section>
 
-        {/* HL usadas (opcional) — puxadas do MSR pelo timeframe+período */}
+        {/* HL usadas — mesma visão do MSR */}
         <section className="card">
           <h3 className="card-title">HL usadas (opcional)</h3>
-          {hlList?.length === 0 ? (
+
+          {loadingHL ? (
+            <p className="muted">Carregando HL…</p>
+          ) : hlList.length === 0 ? (
             <p className="muted">Sem HL para os filtros atuais.</p>
           ) : (
             <div className="table">
@@ -355,9 +334,19 @@ export default function ME() {
               {hlList.map((h) => (
                 <div className="trow" key={h.id}>
                   <div>{Number(h.price).toLocaleString("pt-BR")}</div>
-                  <div><span className="pill">{h.timeframe}</span></div>
-                  <div><span className={`pill ${typePill(getRowType(h))}`}>{getRowType(h)}</span></div>
-                  <div>{(getRowDate(h) || new Date()).toLocaleString("pt-BR")}</div>
+                  <div>
+                    <span className="pill">{h.timeframe}</span>
+                  </div>
+                  <div>
+                    <span className={pillClassByType(h.type ?? "undefined")}>
+                      {h.type ?? "undefined"}
+                    </span>
+                  </div>
+                  <div>
+                    {h.at
+                      ? new Date(h.at).toLocaleString("pt-BR")
+                      : "—"}
+                  </div>
                 </div>
               ))}
             </div>
@@ -366,38 +355,157 @@ export default function ME() {
       </main>
 
       <style jsx>{`
-        .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
-        .title { font-size: 22px; margin: 8px 0 18px; }
-        .card { background:#0e1623; border:1px solid #1e2a3d; border-radius:12px; padding:16px; margin-bottom:16px; }
-        .card-title { margin:0 0 12px; font-size:16px; opacity:.9; }
-        label { display:block; margin-bottom:6px; font-size:13px; opacity:.8; }
-        input, select { width:100%; background:#0b1320; border:1px solid #243048; color:#cfe0ff; border-radius:10px; padding:10px 12px; height:40px; }
-        .grid-4 { display:grid; gap:12px; grid-template-columns: repeat(4, 1fr); }
-        .grid-3 { display:grid; gap:12px; grid-template-columns: repeat(3, 1fr); }
-        .row-actions { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
-        .btn { background:#18243a; border:1px solid #2b3b57; color:#d9e6ff; border-radius:10px; padding:10px 16px; height:40px; }
-        .btn.primary { background:#1a4fff; border-color:#1a4fff; color:#fff; }
-        .statusBox { display:flex; align-items:flex-end; justify-content:flex-end; }
-        .badge { padding:6px 10px; border-radius:999px; font-size:12px; }
-        .ok { background:#0f5132; color:#d1f7e3; }
-        .warn { background:#4d2f00; color:#ffd8a8; }
-        .bad { background:#5c1a1a; color:#ffd6d6; }
-        .muted { opacity:.8; }
-        .table { display:flex; flex-direction:column; gap:6px; }
-        .thead, .trow { display:grid; grid-template-columns: 1.2fr .4fr .7fr 1fr; gap:8px; padding:8px 10px; }
-        .thead { opacity:.7; }
-        .trow { background:#0b1320; border:1px solid #1f2c44; border-radius:10px; }
-        .pill { padding:4px 8px; border-radius:999px; background:#142038; font-size:12px; }
-        .pill.green { background:#103a22; color:#bdf0d2; }
-        .pill.yellow { background:#3a320f; color:#ffe8a1; }
-        .pill.red { background:#3a1010; color:#ffc9c9; }
+        .container {
+          max-width: 1100px;
+          margin: 0 auto;
+          padding: 24px 16px;
+        }
+        .title {
+          font-size: 22px;
+          margin: 8px 0 18px;
+        }
+        .card {
+          background: #0e1623;
+          border: 1px solid #1e2a3d;
+          border-radius: 12px;
+          padding: 16px;
+          margin-bottom: 16px;
+        }
+        .card-title {
+          margin: 0 0 12px;
+          font-size: 16px;
+          opacity: 0.9;
+        }
+        label {
+          display: block;
+          margin-bottom: 6px;
+          font-size: 13px;
+          opacity: 0.8;
+        }
+        input,
+        select {
+          width: 100%;
+          background: #0b1320;
+          border: 1px solid #243048;
+          color: #cfe0ff;
+          border-radius: 10px;
+          padding: 10px 12px;
+          height: 40px;
+        }
+        .grid-4 {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(4, 1fr);
+        }
+        .grid-3 {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .row-actions {
+          display: flex;
+          gap: 10px;
+          margin-top: 12px;
+          flex-wrap: wrap;
+        }
+        .btn {
+          background: #18243a;
+          border: 1px solid #2b3b57;
+          color: #d9e6ff;
+          border-radius: 10px;
+          padding: 10px 16px;
+          height: 40px;
+        }
+        .btn.primary {
+          background: #1a4fff;
+          border-color: #1a4fff;
+          color: #fff;
+        }
+        .statusBox {
+          display: flex;
+          align-items: flex-end;
+          justify-content: flex-end;
+        }
+        .badge {
+          padding: 6px 10px;
+          border-radius: 999px;
+          font-size: 12px;
+        }
+        .ok {
+          background: #0f5132;
+          color: #d1f7e3;
+        }
+        .warn {
+          background: #4d2f00;
+          color: #ffd8a8;
+        }
+        .bad {
+          background: #5c1a1a;
+          color: #ffd6d6;
+        }
+        .muted {
+          opacity: 0.8;
+        }
+        .hint {
+          margin-top: 10px;
+          opacity: 0.75;
+          font-size: 12px;
+        }
+        .table {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .thead,
+        .trow {
+          display: grid;
+          grid-template-columns: 1.2fr 0.4fr 0.7fr 1fr;
+          gap: 8px;
+          padding: 8px 10px;
+        }
+        .thead {
+          opacity: 0.7;
+        }
+        .trow {
+          background: #0b1320;
+          border: 1px solid #1f2c44;
+          border-radius: 10px;
+        }
+        .pill {
+          padding: 4px 8px;
+          border-radius: 999px;
+          background: #142038;
+          font-size: 12px;
+        }
+        .pill.green {
+          background: #103a22;
+          color: #bdf0d2;
+        }
+        .pill.yellow {
+          background: #3a320f;
+          color: #ffe8a1;
+        }
+        .pill.red {
+          background: #3a1010;
+          color: #ffc9c9;
+        }
         @media (max-width: 920px) {
-          .grid-4 { grid-template-columns: 1fr 1fr; }
-          .grid-3 { grid-template-columns: 1fr 1fr; }
-          .thead, .trow { grid-template-columns: 1fr .4fr .7fr 1fr; }
+          .grid-4 {
+            grid-template-columns: 1fr 1fr;
+          }
+          .grid-3 {
+            grid-template-columns: 1fr 1fr;
+          }
+          .thead,
+          .trow {
+            grid-template-columns: 1fr 0.4fr 0.7fr 1fr;
+          }
         }
         @media (max-width: 560px) {
-          .grid-4, .grid-3 { grid-template-columns: 1fr; }
+          .grid-4,
+          .grid-3 {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </Protected>
